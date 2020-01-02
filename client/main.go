@@ -7,8 +7,8 @@ import (
 	"os"
 	"time"
 
-	pb "bitbucket.org/vintikzzzz/torrent-store/torrent-store"
 	"github.com/urfave/cli"
+	pb "github.com/webtor-io/torrent-store/torrent-store"
 	"google.golang.org/grpc"
 )
 

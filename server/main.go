@@ -19,7 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	as "bitbucket.org/vintikzzzz/abuse-store/abuse-store"
-	pb "bitbucket.org/vintikzzzz/torrent-store/torrent-store"
+	pb "github.com/webtor-io/torrent-store/torrent-store"
 
 	"github.com/go-redis/redis"
 	"github.com/urfave/cli"

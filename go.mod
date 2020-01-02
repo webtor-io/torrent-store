@@ -1,4 +1,4 @@
-module bitbucket.org/vintikzzzz/torrent-store
+module github.com/webtor-io/torrent-store
 
 require (
 	bitbucket.org/vintikzzzz/abuse-store v0.0.0-20190819112153-1e114d3326c9
