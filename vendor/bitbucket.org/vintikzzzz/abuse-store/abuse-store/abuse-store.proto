@@ -22,6 +22,18 @@ message PushRequest {
   string email       = 6;
   string description = 7;
   string subject     = 8;
+  enum Cause {
+    ILLEGAL_CONTENT = 0;
+    MALWARE         = 1;
+    APP_ERROR       = 2;
+    QUESTION        = 3;
+  }
+  Cause cause        = 9;
+  enum Source {
+    MAIL = 0;
+    FORM = 1;
+  }
+  Source source      = 10;
 }
 
 // The check request message containing the infoHash

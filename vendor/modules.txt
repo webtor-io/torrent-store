@@ -1,4 +1,4 @@
-# bitbucket.org/vintikzzzz/abuse-store v0.0.0-20190819112153-1e114d3326c9
+# bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb
 bitbucket.org/vintikzzzz/abuse-store/abuse-store
 # github.com/anacrolix/missinggo v0.0.0-20181127231911-72d14a94053a
 github.com/anacrolix/missinggo

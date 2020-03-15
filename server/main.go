@@ -148,31 +148,40 @@ func (s *server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 }
 
 type serveOptions struct {
-	redisPort      int
-	redisHost      string
-	redisPassword  string
-	redisDB        int
-	listeningPort  int
-	listeningHost  string
-	abuseStorePort int
-	abuseStoreHost string
+	redisPort          int
+	redisHost          string
+	redisPassword      string
+	redisDB            int
+	listeningPort      int
+	listeningHost      string
+	abuseStorePort     int
+	abuseStoreHost     string
+	sentinelPort       int
+	sentinelMasterName string
+}
+
+func getRedisCLient(s *serveOptions) redis.UniversalClient {
+	if s.sentinelPort != 0 {
+		addrs := []string{fmt.Sprintf("%s:%d", s.redisHost, s.sentinelPort)}
+		log.Infof("Using sentinel redis client with addrs=%v and master name=%v", addrs, s.sentinelMasterName)
+		return redis.NewUniversalClient(&redis.UniversalOptions{
+			Addrs:      addrs,
+			Password:   "",
+			DB:         0,
+			MasterName: s.sentinelMasterName,
+		})
+	}
+	addrs := []string{fmt.Sprintf("%s:%d", s.redisHost, s.redisPort)}
+	log.Infof("Using default redis client with addrs=%v", addrs)
+	return redis.NewUniversalClient(&redis.UniversalOptions{
+		Addrs:    addrs,
+		Password: "",
+		DB:       0,
+	})
 }
 
 func serve(opts *serveOptions) error {
-	log.WithFields(log.Fields{
-		"host": opts.redisHost,
-		"port": opts.redisPort,
-		"db":   opts.redisDB,
-	}).Info("Initializing redis client")
-	addrs := []string{fmt.Sprintf("%s:%d", opts.redisHost, opts.redisPort)}
-	// if opts.redisSlaveHost != "" {
-	// 	addrs = append(addrs, fmt.Sprintf("%s:%d", opts.redisHost, opts.redisPort))
-	// }
-	client := redis.NewUniversalClient(&redis.UniversalOptions{
-		Addrs:    addrs,
-		Password: opts.redisPassword,
-		DB:       opts.redisDB,
-	})
+	client := getRedisCLient(opts)
 	defer client.Close()
 	addr := fmt.Sprintf("%s:%d", opts.listeningHost, opts.listeningPort)
 	lis, err := net.Listen("tcp", addr)
@@ -282,20 +291,33 @@ func main() {
 			Usage: "listening port",
 			Value: 50051,
 		},
+		cli.IntFlag{
+			Name:   "redis-sentinel-port",
+			Usage:  "redis sentinel port",
+			EnvVar: "REDIS_SERVICE_PORT_REDIS_SENTINEL",
+		},
+		cli.StringFlag{
+			Name:   "redis-sentinel-master-name",
+			Usage:  "redis sentinel master name",
+			Value:  "mymaster",
+			EnvVar: "REDIS_SERVICE_SENTINEL_MASTER_NAME",
+		},
 	}
 	app.Action = func(c *cli.Context) error {
 		if c.String("redis-host") == "" {
 			return errors.New("No redis host defined")
 		}
 		return serve(&serveOptions{
-			redisPort:      c.Int("redis-port"),
-			redisHost:      c.String("redis-host"),
-			redisDB:        c.Int("redis-db"),
-			redisPassword:  c.String("redis-password"),
-			listeningPort:  c.Int("port"),
-			listeningHost:  c.String("host"),
-			abuseStoreHost: c.String("abuse-store-host"),
-			abuseStorePort: c.Int("abuse-store-port"),
+			redisPort:          c.Int("redis-port"),
+			redisHost:          c.String("redis-host"),
+			redisDB:            c.Int("redis-db"),
+			redisPassword:      c.String("redis-password"),
+			listeningPort:      c.Int("port"),
+			listeningHost:      c.String("host"),
+			abuseStoreHost:     c.String("abuse-store-host"),
+			abuseStorePort:     c.Int("abuse-store-port"),
+			sentinelPort:       c.Int("redis-sentinel-port"),
+			sentinelMasterName: c.String("redis-sentinel-master-name"),
 		})
 	}
 	err := app.Run(os.Args)
