@@ -5,6 +5,7 @@ bitbucket.org/vintikzzzz/abuse-store v0.0.0-20190819112153-1e114d3326c9 h1:lF1UO
 bitbucket.org/vintikzzzz/abuse-store v0.0.0-20190819112153-1e114d3326c9/go.mod h1:A019kjdStvV7wuDmXLBOn6c4ivcxOmivJb+iEeLvQyI=
 bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191108101642-911c776f9c94 h1:LQpPxe9OvqKkUTRdb9kI/6GLrwEUDYw5k6YgaNkMBRA=
 bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb h1:NnMay2OvZqVo3JeRyHxIsuc1Xofvx9+D+kaKcyV2k/8=
+bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb/go.mod h1:/0liZmJ4Ihd6JLAx7Y6ZpSVRTtPCQUUeHt/Emj4cHlU=
 cloud.google.com/go v0.26.0 h1:e0WKqKTd5BnrG8aKH3J3h+QvEIQtSUcf2n5UZ5ZgLtQ=
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.34.0 h1:eOI3/cP2VTU6uZLDYAoic+eyzzB9YyGmJ7eIjl8rOPg=

@@ -3,13 +3,14 @@
 
 package abuse_store
 
-import proto "github.com/golang/protobuf/proto"
-import fmt "fmt"
-import math "math"
-
 import (
-	context "golang.org/x/net/context"
+	context "context"
+	fmt "fmt"
+	proto "github.com/golang/protobuf/proto"
 	grpc "google.golang.org/grpc"
+	codes "google.golang.org/grpc/codes"
+	status "google.golang.org/grpc/status"
+	math "math"
 )
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -21,7 +22,63 @@ var _ = math.Inf
 // is compatible with the proto package it is being compiled against.
 // A compilation error at this line likely means your copy of the
 // proto package needs to be updated.
-const _ = proto.ProtoPackageIsVersion2 // please upgrade the proto package
+const _ = proto.ProtoPackageIsVersion3 // please upgrade the proto package
+
+type PushRequest_Cause int32
+
+const (
+	PushRequest_ILLEGAL_CONTENT PushRequest_Cause = 0
+	PushRequest_MALWARE         PushRequest_Cause = 1
+	PushRequest_APP_ERROR       PushRequest_Cause = 2
+	PushRequest_QUESTION        PushRequest_Cause = 3
+)
+
+var PushRequest_Cause_name = map[int32]string{
+	0: "ILLEGAL_CONTENT",
+	1: "MALWARE",
+	2: "APP_ERROR",
+	3: "QUESTION",
+}
+
+var PushRequest_Cause_value = map[string]int32{
+	"ILLEGAL_CONTENT": 0,
+	"MALWARE":         1,
+	"APP_ERROR":       2,
+	"QUESTION":        3,
+}
+
+func (x PushRequest_Cause) String() string {
+	return proto.EnumName(PushRequest_Cause_name, int32(x))
+}
+
+func (PushRequest_Cause) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_f8bb29684f5cf846, []int{1, 0}
+}
+
+type PushRequest_Source int32
+
+const (
+	PushRequest_MAIL PushRequest_Source = 0
+	PushRequest_FORM PushRequest_Source = 1
+)
+
+var PushRequest_Source_name = map[int32]string{
+	0: "MAIL",
+	1: "FORM",
+}
+
+var PushRequest_Source_value = map[string]int32{
+	"MAIL": 0,
+	"FORM": 1,
+}
+
+func (x PushRequest_Source) String() string {
+	return proto.EnumName(PushRequest_Source_name, int32(x))
+}
+
+func (PushRequest_Source) EnumDescriptor() ([]byte, []int) {
+	return fileDescriptor_f8bb29684f5cf846, []int{1, 1}
+}
 
 // The push response message containing
 type PushReply struct {
@@ -34,16 +91,17 @@ func (m *PushReply) Reset()         { *m = PushReply{} }
 func (m *PushReply) String() string { return proto.CompactTextString(m) }
 func (*PushReply) ProtoMessage()    {}
 func (*PushReply) Descriptor() ([]byte, []int) {
-	return fileDescriptor_abuse_store_14e89cb845aa34db, []int{0}
+	return fileDescriptor_f8bb29684f5cf846, []int{0}
 }
+
 func (m *PushReply) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_PushReply.Unmarshal(m, b)
 }
 func (m *PushReply) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	return xxx_messageInfo_PushReply.Marshal(b, m, deterministic)
 }
-func (dst *PushReply) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_PushReply.Merge(dst, src)
+func (m *PushReply) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_PushReply.Merge(m, src)
 }
 func (m *PushReply) XXX_Size() int {
 	return xxx_messageInfo_PushReply.Size(m)
@@ -56,33 +114,36 @@ var xxx_messageInfo_PushReply proto.InternalMessageInfo
 
 // The push request message
 type PushRequest struct {
-	NoticeId             string   `protobuf:"bytes,1,opt,name=notice_id,json=noticeId,proto3" json:"notice_id,omitempty"`
-	Infohash             string   `protobuf:"bytes,2,opt,name=infohash,proto3" json:"infohash,omitempty"`
-	Filename             string   `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
-	Work                 string   `protobuf:"bytes,4,opt,name=work,proto3" json:"work,omitempty"`
-	StartedAt            int64    `protobuf:"varint,5,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	Email                string   `protobuf:"bytes,6,opt,name=email,proto3" json:"email,omitempty"`
-	Description          string   `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
-	Subject              string   `protobuf:"bytes,8,opt,name=subject,proto3" json:"subject,omitempty"`
-	XXX_NoUnkeyedLiteral struct{} `json:"-"`
-	XXX_unrecognized     []byte   `json:"-"`
-	XXX_sizecache        int32    `json:"-"`
+	NoticeId             string             `protobuf:"bytes,1,opt,name=notice_id,json=noticeId,proto3" json:"notice_id,omitempty"`
+	Infohash             string             `protobuf:"bytes,2,opt,name=infohash,proto3" json:"infohash,omitempty"`
+	Filename             string             `protobuf:"bytes,3,opt,name=filename,proto3" json:"filename,omitempty"`
+	Work                 string             `protobuf:"bytes,4,opt,name=work,proto3" json:"work,omitempty"`
+	StartedAt            int64              `protobuf:"varint,5,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	Email                string             `protobuf:"bytes,6,opt,name=email,proto3" json:"email,omitempty"`
+	Description          string             `protobuf:"bytes,7,opt,name=description,proto3" json:"description,omitempty"`
+	Subject              string             `protobuf:"bytes,8,opt,name=subject,proto3" json:"subject,omitempty"`
+	Cause                PushRequest_Cause  `protobuf:"varint,9,opt,name=cause,proto3,enum=PushRequest_Cause" json:"cause,omitempty"`
+	Source               PushRequest_Source `protobuf:"varint,10,opt,name=source,proto3,enum=PushRequest_Source" json:"source,omitempty"`
+	XXX_NoUnkeyedLiteral struct{}           `json:"-"`
+	XXX_unrecognized     []byte             `json:"-"`
+	XXX_sizecache        int32              `json:"-"`
 }
 
 func (m *PushRequest) Reset()         { *m = PushRequest{} }
 func (m *PushRequest) String() string { return proto.CompactTextString(m) }
 func (*PushRequest) ProtoMessage()    {}
 func (*PushRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_abuse_store_14e89cb845aa34db, []int{1}
+	return fileDescriptor_f8bb29684f5cf846, []int{1}
 }
+
 func (m *PushRequest) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_PushRequest.Unmarshal(m, b)
 }
 func (m *PushRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	return xxx_messageInfo_PushRequest.Marshal(b, m, deterministic)
 }
-func (dst *PushRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_PushRequest.Merge(dst, src)
+func (m *PushRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_PushRequest.Merge(m, src)
 }
 func (m *PushRequest) XXX_Size() int {
 	return xxx_messageInfo_PushRequest.Size(m)
@@ -149,6 +210,20 @@ func (m *PushRequest) GetSubject() string {
 	return ""
 }
 
+func (m *PushRequest) GetCause() PushRequest_Cause {
+	if m != nil {
+		return m.Cause
+	}
+	return PushRequest_ILLEGAL_CONTENT
+}
+
+func (m *PushRequest) GetSource() PushRequest_Source {
+	if m != nil {
+		return m.Source
+	}
+	return PushRequest_MAIL
+}
+
 // The check request message containing the infoHash
 type CheckRequest struct {
 	Infohash             string   `protobuf:"bytes,1,opt,name=infohash,proto3" json:"infohash,omitempty"`
@@ -161,16 +236,17 @@ func (m *CheckRequest) Reset()         { *m = CheckRequest{} }
 func (m *CheckRequest) String() string { return proto.CompactTextString(m) }
 func (*CheckRequest) ProtoMessage()    {}
 func (*CheckRequest) Descriptor() ([]byte, []int) {
-	return fileDescriptor_abuse_store_14e89cb845aa34db, []int{2}
+	return fileDescriptor_f8bb29684f5cf846, []int{2}
 }
+
 func (m *CheckRequest) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_CheckRequest.Unmarshal(m, b)
 }
 func (m *CheckRequest) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	return xxx_messageInfo_CheckRequest.Marshal(b, m, deterministic)
 }
-func (dst *CheckRequest) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_CheckRequest.Merge(dst, src)
+func (m *CheckRequest) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_CheckRequest.Merge(m, src)
 }
 func (m *CheckRequest) XXX_Size() int {
 	return xxx_messageInfo_CheckRequest.Size(m)
@@ -200,16 +276,17 @@ func (m *CheckReply) Reset()         { *m = CheckReply{} }
 func (m *CheckReply) String() string { return proto.CompactTextString(m) }
 func (*CheckReply) ProtoMessage()    {}
 func (*CheckReply) Descriptor() ([]byte, []int) {
-	return fileDescriptor_abuse_store_14e89cb845aa34db, []int{3}
+	return fileDescriptor_f8bb29684f5cf846, []int{3}
 }
+
 func (m *CheckReply) XXX_Unmarshal(b []byte) error {
 	return xxx_messageInfo_CheckReply.Unmarshal(m, b)
 }
 func (m *CheckReply) XXX_Marshal(b []byte, deterministic bool) ([]byte, error) {
 	return xxx_messageInfo_CheckReply.Marshal(b, m, deterministic)
 }
-func (dst *CheckReply) XXX_Merge(src proto.Message) {
-	xxx_messageInfo_CheckReply.Merge(dst, src)
+func (m *CheckReply) XXX_Merge(src proto.Message) {
+	xxx_messageInfo_CheckReply.Merge(m, src)
 }
 func (m *CheckReply) XXX_Size() int {
 	return xxx_messageInfo_CheckReply.Size(m)
@@ -228,10 +305,44 @@ func (m *CheckReply) GetExists() bool {
 }
 
 func init() {
+	proto.RegisterEnum("PushRequest_Cause", PushRequest_Cause_name, PushRequest_Cause_value)
+	proto.RegisterEnum("PushRequest_Source", PushRequest_Source_name, PushRequest_Source_value)
 	proto.RegisterType((*PushReply)(nil), "PushReply")
 	proto.RegisterType((*PushRequest)(nil), "PushRequest")
 	proto.RegisterType((*CheckRequest)(nil), "CheckRequest")
 	proto.RegisterType((*CheckReply)(nil), "CheckReply")
+}
+
+func init() { proto.RegisterFile("abuse-store.proto", fileDescriptor_f8bb29684f5cf846) }
+
+var fileDescriptor_f8bb29684f5cf846 = []byte{
+	// 415 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x54, 0x52, 0x6d, 0x6b, 0xdb, 0x30,
+	0x10, 0x8e, 0x9b, 0xd8, 0xb1, 0xcf, 0xe9, 0xe6, 0x5d, 0xc7, 0x10, 0xd9, 0x06, 0x41, 0x6c, 0x10,
+	0x36, 0xe6, 0x0f, 0xdd, 0x2f, 0x30, 0xc1, 0x1d, 0x01, 0xe7, 0x65, 0x4a, 0x46, 0x3f, 0x06, 0xc7,
+	0x51, 0x89, 0xd6, 0x34, 0xf2, 0x2c, 0x99, 0xad, 0xff, 0x67, 0x3f, 0xb4, 0x58, 0xb6, 0xa9, 0xfb,
+	0xed, 0x9e, 0x97, 0x3b, 0xe9, 0xb8, 0x07, 0xde, 0xa4, 0xfb, 0x52, 0xf1, 0x6f, 0x4a, 0xcb, 0x82,
+	0x87, 0x79, 0x21, 0xb5, 0xa4, 0x3e, 0x78, 0xeb, 0x52, 0x1d, 0x19, 0xcf, 0x4f, 0x8f, 0xf4, 0x7f,
+	0x1f, 0xfc, 0x1a, 0xfd, 0x29, 0xb9, 0xd2, 0xf8, 0x1e, 0xbc, 0xb3, 0xd4, 0x22, 0xe3, 0x3b, 0x71,
+	0x20, 0xd6, 0xc4, 0x9a, 0x7a, 0xcc, 0xad, 0x89, 0xf9, 0x01, 0xc7, 0xe0, 0x8a, 0xf3, 0x9d, 0x3c,
+	0xa6, 0xea, 0x48, 0x2e, 0x6a, 0xad, 0xc5, 0x95, 0x76, 0x27, 0x4e, 0xfc, 0x9c, 0x3e, 0x70, 0xd2,
+	0xaf, 0xb5, 0x16, 0x23, 0xc2, 0xe0, 0xaf, 0x2c, 0xee, 0xc9, 0xc0, 0xf0, 0xa6, 0xc6, 0x8f, 0x00,
+	0x4a, 0xa7, 0x85, 0xe6, 0x87, 0x5d, 0xaa, 0x89, 0x3d, 0xb1, 0xa6, 0x7d, 0xe6, 0x35, 0x4c, 0xa4,
+	0xf1, 0x2d, 0xd8, 0xfc, 0x21, 0x15, 0x27, 0xe2, 0x98, 0x9e, 0x1a, 0xe0, 0x04, 0xfc, 0x03, 0x57,
+	0x59, 0x21, 0x72, 0x2d, 0xe4, 0x99, 0x0c, 0x8d, 0xd6, 0xa5, 0x90, 0xc0, 0x50, 0x95, 0xfb, 0xdf,
+	0x3c, 0xd3, 0xc4, 0x35, 0x6a, 0x0b, 0x71, 0x0a, 0x76, 0x96, 0x96, 0x8a, 0x13, 0x6f, 0x62, 0x4d,
+	0x5f, 0x5d, 0x63, 0xd8, 0x59, 0x3b, 0x9c, 0x55, 0x0a, 0xab, 0x0d, 0xf8, 0x15, 0x1c, 0x25, 0xcb,
+	0x22, 0xe3, 0x04, 0x8c, 0xf5, 0xea, 0x85, 0x75, 0x63, 0x24, 0xd6, 0x58, 0xe8, 0x0d, 0xd8, 0xa6,
+	0x19, 0xaf, 0xe0, 0xf5, 0x3c, 0x49, 0xe2, 0x1f, 0x51, 0xb2, 0x9b, 0xad, 0x96, 0xdb, 0x78, 0xb9,
+	0x0d, 0x7a, 0xe8, 0xc3, 0x70, 0x11, 0x25, 0xb7, 0x11, 0x8b, 0x03, 0x0b, 0x2f, 0xc1, 0x8b, 0xd6,
+	0xeb, 0x5d, 0xcc, 0xd8, 0x8a, 0x05, 0x17, 0x38, 0x02, 0xf7, 0xe7, 0xaf, 0x78, 0xb3, 0x9d, 0xaf,
+	0x96, 0x41, 0x9f, 0x7e, 0x00, 0xa7, 0x9e, 0x8c, 0x2e, 0x0c, 0x16, 0xd1, 0x3c, 0x09, 0x7a, 0x55,
+	0x75, 0xb3, 0x62, 0x8b, 0xc0, 0xa2, 0x5f, 0x60, 0x34, 0x3b, 0xf2, 0xec, 0xbe, 0x3d, 0x53, 0xf7,
+	0x12, 0xd6, 0xcb, 0x4b, 0xd0, 0x4f, 0x00, 0x8d, 0x37, 0x3f, 0x3d, 0xe2, 0x3b, 0x70, 0xf8, 0x3f,
+	0xa1, 0xb4, 0x32, 0x3e, 0x97, 0x35, 0xe8, 0xfa, 0x16, 0x20, 0xaa, 0xa2, 0xb1, 0xa9, 0x92, 0x81,
+	0x14, 0x06, 0xd5, 0x8e, 0x38, 0xea, 0xae, 0x3a, 0x86, 0xf0, 0x39, 0x28, 0x3d, 0xfc, 0x0c, 0xb6,
+	0x99, 0x8b, 0x97, 0x61, 0xf7, 0x2f, 0x63, 0x3f, 0x7c, 0x7e, 0x8e, 0xf6, 0xf6, 0x8e, 0x49, 0xd9,
+	0xf7, 0xa7, 0x00, 0x00, 0x00, 0xff, 0xff, 0x3d, 0x47, 0x15, 0x2f, 0x7a, 0x02, 0x00, 0x00,
 }
 
 // Reference imports to suppress errors if they are not otherwise used.
@@ -284,6 +395,17 @@ type AbuseStoreServer interface {
 	Push(context.Context, *PushRequest) (*PushReply, error)
 	// Check abuse in the store for existence
 	Check(context.Context, *CheckRequest) (*CheckReply, error)
+}
+
+// UnimplementedAbuseStoreServer can be embedded to have forward compatible implementations.
+type UnimplementedAbuseStoreServer struct {
+}
+
+func (*UnimplementedAbuseStoreServer) Push(ctx context.Context, req *PushRequest) (*PushReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Push not implemented")
+}
+func (*UnimplementedAbuseStoreServer) Check(ctx context.Context, req *CheckRequest) (*CheckReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Check not implemented")
 }
 
 func RegisterAbuseStoreServer(s *grpc.Server, srv AbuseStoreServer) {
@@ -341,29 +463,4 @@ var _AbuseStore_serviceDesc = grpc.ServiceDesc{
 	},
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "abuse-store.proto",
-}
-
-func init() { proto.RegisterFile("abuse-store.proto", fileDescriptor_abuse_store_14e89cb845aa34db) }
-
-var fileDescriptor_abuse_store_14e89cb845aa34db = []byte{
-	// 293 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x54, 0x91, 0xcf, 0x4e, 0xb3, 0x40,
-	0x14, 0xc5, 0xcb, 0xd7, 0x96, 0xc2, 0xa5, 0xdf, 0xc2, 0x1b, 0x63, 0x26, 0x18, 0x13, 0x32, 0xd1,
-	0xa4, 0x31, 0x91, 0x85, 0x3e, 0x41, 0xe3, 0xca, 0x9d, 0xc1, 0x85, 0xcb, 0x66, 0x80, 0xdb, 0x30,
-	0x96, 0x32, 0xc8, 0x0c, 0xd1, 0x3e, 0xb1, 0xaf, 0x61, 0x18, 0x20, 0xc5, 0xdd, 0xfc, 0xce, 0xb9,
-	0xf3, 0xe7, 0x9c, 0x81, 0x0b, 0x91, 0xb6, 0x9a, 0x1e, 0xb4, 0x51, 0x0d, 0xc5, 0x75, 0xa3, 0x8c,
-	0xe2, 0x01, 0xf8, 0xaf, 0xad, 0x2e, 0x12, 0xaa, 0xcb, 0x13, 0xff, 0x71, 0x20, 0xe8, 0xe9, 0xb3,
-	0x25, 0x6d, 0xf0, 0x1a, 0xfc, 0x4a, 0x19, 0x99, 0xd1, 0x4e, 0xe6, 0xcc, 0x89, 0x9c, 0x8d, 0x9f,
-	0x78, 0xbd, 0xf0, 0x92, 0x63, 0x08, 0x9e, 0xac, 0xf6, 0xaa, 0x10, 0xba, 0x60, 0xff, 0x7a, 0x6f,
-	0xe4, 0xce, 0xdb, 0xcb, 0x92, 0x2a, 0x71, 0x24, 0x36, 0xef, 0xbd, 0x91, 0x11, 0x61, 0xf1, 0xa5,
-	0x9a, 0x03, 0x5b, 0x58, 0xdd, 0xae, 0xf1, 0x06, 0x40, 0x1b, 0xd1, 0x18, 0xca, 0x77, 0xc2, 0xb0,
-	0x65, 0xe4, 0x6c, 0xe6, 0x89, 0x3f, 0x28, 0x5b, 0x83, 0x97, 0xb0, 0xa4, 0xa3, 0x90, 0x25, 0x73,
-	0xed, 0x9e, 0x1e, 0x30, 0x82, 0x20, 0x27, 0x9d, 0x35, 0xb2, 0x36, 0x52, 0x55, 0x6c, 0x65, 0xbd,
-	0xa9, 0x84, 0x0c, 0x56, 0xba, 0x4d, 0x3f, 0x28, 0x33, 0xcc, 0xb3, 0xee, 0x88, 0xfc, 0x1e, 0xd6,
-	0xcf, 0x05, 0x65, 0x87, 0x31, 0xe9, 0x34, 0x8c, 0xf3, 0x37, 0x0c, 0xbf, 0x05, 0x18, 0x66, 0xeb,
-	0xf2, 0x84, 0x57, 0xe0, 0xd2, 0xb7, 0xd4, 0x46, 0xdb, 0x39, 0x2f, 0x19, 0xe8, 0xf1, 0x1d, 0x60,
-	0xdb, 0xb5, 0xfb, 0xd6, 0x95, 0x8b, 0x1c, 0x16, 0x5d, 0x91, 0xb8, 0x8e, 0x27, 0x7d, 0x86, 0x10,
-	0x9f, 0xbb, 0x9e, 0xe1, 0x1d, 0x2c, 0xed, 0xb9, 0xf8, 0x3f, 0x9e, 0xbe, 0x25, 0x0c, 0xe2, 0xf3,
-	0x75, 0x7c, 0x96, 0xba, 0xf6, 0xa3, 0x9e, 0x7e, 0x03, 0x00, 0x00, 0xff, 0xff, 0x37, 0xc2, 0x1e,
-	0xa5, 0xbd, 0x01, 0x00, 0x00,
 }
