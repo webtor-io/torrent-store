@@ -43,7 +43,9 @@ func (s *server) isAbused(ctx context.Context, infoHash string) (bool, error) {
 	if s.asCl == nil {
 		return false, nil
 	}
-	r, err := s.asCl.Check(ctx, &as.CheckRequest{Infohash: infoHash})
+	inCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	r, err := s.asCl.Check(inCtx, &as.CheckRequest{Infohash: infoHash})
 	if err != nil {
 		return true, err
 	}
