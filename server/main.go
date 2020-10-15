@@ -26,11 +26,6 @@ import (
 
 	"github.com/anacrolix/torrent/metainfo"
 
-	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
-	grpc_logrus "github.com/grpc-ecosystem/go-grpc-middleware/logging/logrus"
-	grpc_recovery "github.com/grpc-ecosystem/go-grpc-middleware/recovery"
-	grpc_ctxtags "github.com/grpc-ecosystem/go-grpc-middleware/tags"
-
 	"github.com/pkg/errors"
 )
 
@@ -206,21 +201,21 @@ func serve(opts *serveOptions) error {
 
 	go func() {
 		log.WithField("addr", addr).Info("Start listening for incoming GRPC connections")
-		grpcLog := log.WithFields(log.Fields{})
-		alwaysLoggingDeciderServer := func(ctx context.Context, fullMethodName string, servingObject interface{}) bool { return true }
+		// grpcLog := log.WithFields(log.Fields{})
+		// alwaysLoggingDeciderServer := func(ctx context.Context, fullMethodName string, servingObject interface{}) bool { return true }
 		s := grpc.NewServer(
-			grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
-				grpc_ctxtags.StreamServerInterceptor(),
-				grpc_logrus.StreamServerInterceptor(grpcLog),
-				grpc_logrus.PayloadStreamServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
-				grpc_recovery.StreamServerInterceptor(),
-			)),
-			grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
-				grpc_ctxtags.UnaryServerInterceptor(),
-				grpc_logrus.UnaryServerInterceptor(grpcLog),
-				grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
-				grpc_recovery.UnaryServerInterceptor(),
-			)),
+		// grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
+		// 	grpc_ctxtags.StreamServerInterceptor(),
+		// 	grpc_logrus.StreamServerInterceptor(grpcLog),
+		// 	grpc_logrus.PayloadStreamServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
+		// 	grpc_recovery.StreamServerInterceptor(),
+		// )),
+		// grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+		// 	grpc_ctxtags.UnaryServerInterceptor(),
+		// 	grpc_logrus.UnaryServerInterceptor(grpcLog),
+		// 	grpc_logrus.PayloadUnaryServerInterceptor(grpcLog, alwaysLoggingDeciderServer),
+		// 	grpc_recovery.UnaryServerInterceptor(),
+		// )),
 		)
 
 		pb.RegisterTorrentStoreServer(s, &server{cl: client, asCl: asCl})
