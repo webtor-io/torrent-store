@@ -1,7 +1,7 @@
 module github.com/webtor-io/torrent-store
 
 require (
-	bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb
+	bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb // indirect
 	cloud.google.com/go v0.44.3 // indirect
 	github.com/anacrolix/torrent v0.0.0-20181129073333-cc531b8c4a80
 	github.com/go-chi/chi v4.0.2+incompatible // indirect
@@ -19,6 +19,7 @@ require (
 	github.com/stretchr/objx v0.2.0 // indirect
 	github.com/stretchr/testify v1.4.0 // indirect
 	github.com/urfave/cli v1.21.0
+	github.com/webtor-io/abuse-store v0.0.0-20210710111318-01e4ce3bdc7c
 	golang.org/x/mobile v0.0.0-20190814143026-e8b3e6111d02 // indirect
 	golang.org/x/net v0.0.0-20201010224723-4f7140c49acb
 	golang.org/x/sys v0.0.0-20201015000850-e3ed0017c211 // indirect
