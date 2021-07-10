@@ -1,7 +1,6 @@
 module github.com/webtor-io/torrent-store
 
 require (
-	bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb // indirect
 	cloud.google.com/go v0.44.3 // indirect
 	github.com/anacrolix/torrent v0.0.0-20181129073333-cc531b8c4a80
 	github.com/go-chi/chi v4.0.2+incompatible // indirect
@@ -30,4 +29,4 @@ require (
 	honnef.co/go/tools v0.0.1-2019.2.2 // indirect
 )
 
-go 1.15
+go 1.16
