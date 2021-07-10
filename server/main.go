@@ -18,7 +18,7 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
-	as "bitbucket.org/vintikzzzz/abuse-store/abuse-store"
+	as "github.com/webtor-io/abuse-store/abuse-store"
 	pb "github.com/webtor-io/torrent-store/torrent-store"
 
 	"github.com/go-redis/redis"
