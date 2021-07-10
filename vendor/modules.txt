@@ -1,5 +1,3 @@
-# bitbucket.org/vintikzzzz/abuse-store v0.0.0-20191125201244-47198f5e1beb
-## explicit
 # cloud.google.com/go v0.44.3
 ## explicit
 # github.com/anacrolix/missinggo v0.0.0-20181127231911-72d14a94053a
