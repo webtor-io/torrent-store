@@ -14,7 +14,7 @@
 
 tmp
 
-server/server
+torrent-store
 client/client
 
 .DS_Store

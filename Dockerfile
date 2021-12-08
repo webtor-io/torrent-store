@@ -1,12 +1,10 @@
-FROM golang:latest
+FROM golang:latest as build
+
+# set work dir
+WORKDIR /app
 
 # copy the source files
-COPY . /go/src/github.com/webtor-io/torrent-store
-
-WORKDIR /go/src/github.com/webtor-io/torrent-store/server
-
-# enable modules
-ENV GO111MODULE=on
+COPY . .
 
 # disable crosscompiling
 ENV CGO_ENABLED=0
@@ -17,13 +15,13 @@ ENV GOOS=linux
 # build the binary with debug information removed
 RUN go build -mod=vendor -ldflags '-w -s' -a -installsuffix cgo -o server
 
-FROM scratch
+FROM alpine:latest
 
 # copy our static linked library
-COPY --from=0 /go/src/github.com/webtor-io/torrent-store/server/server .
+COPY --from=build /app/server .
 
 # tell we are exposing our service on port 50051
 EXPOSE 50051
 
 # run it!
-CMD ["./server"]
+CMD ["./server", "serve"]
