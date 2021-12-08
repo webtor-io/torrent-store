@@ -1,2 +1,7 @@
-.git
+.git*
 *Dockerfile*
+client
+torrent-store
+README.md
+LICENSE
+Makefile

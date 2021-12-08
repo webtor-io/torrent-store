@@ -1,2 +1,7 @@
 protoc:
-	protoc -I torrent-store/ torrent-store/torrent-store.proto --go_out=plugins=grpc:torrent-store
+	protoc -I proto/ \
+	--go_out=proto/ \
+	--go-grpc_out=proto/ \
+	--go_opt=paths=source_relative \
+	--go-grpc_opt=paths=source_relative \
+	proto/torrent-store.proto

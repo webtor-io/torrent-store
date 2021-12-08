@@ -102,7 +102,7 @@ func (d *Decoder) throwSyntaxError(offset int64, err error) {
 }
 
 // called when 'i' was consumed
-func (d *Decoder) parseInt(v reflect.Value) {
+func (d *Decoder) parseInt(v reflect.Value) error {
 	start := d.Offset - 1
 	d.readUntil('e')
 	if d.buf.Len() == 0 {
@@ -120,10 +120,10 @@ func (d *Decoder) parseInt(v reflect.Value) {
 		checkForIntParseError(err, start)
 
 		if v.OverflowInt(n) {
-			panic(&UnmarshalTypeError{
-				Value: "integer " + s,
-				Type:  v.Type(),
-			})
+			return &UnmarshalTypeError{
+				BencodeTypeName:     "int",
+				UnmarshalTargetType: v.Type(),
+			}
 		}
 		v.SetInt(n)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
@@ -131,21 +131,22 @@ func (d *Decoder) parseInt(v reflect.Value) {
 		checkForIntParseError(err, start)
 
 		if v.OverflowUint(n) {
-			panic(&UnmarshalTypeError{
-				Value: "integer " + s,
-				Type:  v.Type(),
-			})
+			return &UnmarshalTypeError{
+				BencodeTypeName:     "int",
+				UnmarshalTargetType: v.Type(),
+			}
 		}
 		v.SetUint(n)
 	case reflect.Bool:
 		v.SetBool(s != "0")
 	default:
-		panic(&UnmarshalTypeError{
-			Value: "integer " + s,
-			Type:  v.Type(),
-		})
+		return &UnmarshalTypeError{
+			BencodeTypeName:     "int",
+			UnmarshalTargetType: v.Type(),
+		}
 	}
 	d.buf.Reset()
+	return nil
 }
 
 func (d *Decoder) parseString(v reflect.Value) error {
@@ -153,7 +154,7 @@ func (d *Decoder) parseString(v reflect.Value) error {
 
 	// read the string length first
 	d.readUntil(':')
-	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 0)
+	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 32)
 	checkForIntParseError(err, start)
 
 	defer d.buf.Reset()
@@ -198,75 +199,77 @@ func (d *Decoder) parseString(v reflect.Value) error {
 	read(d.buf.Bytes()[:length])
 	// I believe we return here to support "ignore_unmarshal_type_error".
 	return &UnmarshalTypeError{
-		Value: "string",
-		Type:  v.Type(),
+		BencodeTypeName:     "string",
+		UnmarshalTargetType: v.Type(),
 	}
 }
 
 // Info for parsing a dict value.
 type dictField struct {
-	Value reflect.Value // Storage for the parsed value.
-	// True if field value should be parsed into Value. If false, the value
-	// should be parsed and discarded.
-	Ok                       bool
-	Set                      func() // Call this after parsing into Value.
-	IgnoreUnmarshalTypeError bool
+	Type reflect.Type
+	Get  func(value reflect.Value) func(reflect.Value)
+	Tags tag
 }
 
 // Returns specifics for parsing a dict field value.
-func getDictField(dict reflect.Value, key string) dictField {
+func getDictField(dict reflect.Type, key string) (_ dictField, err error) {
 	// get valuev as a map value or as a struct field
-	switch dict.Kind() {
+	switch k := dict.Kind(); k {
 	case reflect.Map:
-		value := reflect.New(dict.Type().Elem()).Elem()
 		return dictField{
-			Value: value,
-			Ok:    true,
-			Set: func() {
-				if dict.IsNil() {
-					dict.Set(reflect.MakeMap(dict.Type()))
+			Type: dict.Elem(),
+			Get: func(mapValue reflect.Value) func(reflect.Value) {
+				return func(value reflect.Value) {
+					if mapValue.IsNil() {
+						mapValue.Set(reflect.MakeMap(dict))
+					}
+					// Assigns the value into the map.
+					// log.Printf("map type: %v", mapValue.Type())
+					mapValue.SetMapIndex(reflect.ValueOf(key).Convert(dict.Key()), value)
 				}
-				// Assigns the value into the map.
-				dict.SetMapIndex(reflect.ValueOf(key).Convert(dict.Type().Key()), value)
 			},
-		}
+		}, nil
 	case reflect.Struct:
-		sf, ok := getStructFieldForKey(dict.Type(), key)
-		if !ok {
-			return dictField{}
-		}
-		if sf.r.PkgPath != "" {
-			panic(&UnmarshalFieldError{
-				Key:   key,
-				Type:  dict.Type(),
-				Field: sf.r,
-			})
-		}
-		return dictField{
-			Value: dict.FieldByIndex(sf.r.Index),
-			Ok:    true,
-			Set:   func() {},
-			IgnoreUnmarshalTypeError: sf.tag.IgnoreUnmarshalTypeError(),
-		}
+		return getStructFieldForKey(dict, key), nil
+		//if sf.r.PkgPath != "" {
+		//	panic(&UnmarshalFieldError{
+		//		Key:   key,
+		//		Type:  dict.Type(),
+		//		Field: sf.r,
+		//	})
+		//}
 	default:
-		return dictField{}
+		err = fmt.Errorf("can't assign bencode dict items into a %v", k)
+		return
 	}
-}
-
-type structField struct {
-	r   reflect.StructField
-	tag tag
 }
 
 var (
 	structFieldsMu sync.Mutex
-	structFields   = map[reflect.Type]map[string]structField{}
+	structFields   = map[reflect.Type]map[string]dictField{}
 )
 
-func parseStructFields(struct_ reflect.Type, each func(string, structField)) {
-	for i, n := 0, struct_.NumField(); i < n; i++ {
+func parseStructFields(struct_ reflect.Type, each func(key string, df dictField)) {
+	for _i, n := 0, struct_.NumField(); _i < n; _i++ {
+		i := _i
 		f := struct_.Field(i)
 		if f.Anonymous {
+			t := f.Type
+			if t.Kind() == reflect.Ptr {
+				t = t.Elem()
+			}
+			parseStructFields(t, func(key string, df dictField) {
+				innerGet := df.Get
+				df.Get = func(value reflect.Value) func(reflect.Value) {
+					anonPtr := value.Field(i)
+					if anonPtr.Kind() == reflect.Ptr && anonPtr.IsNil() {
+						anonPtr.Set(reflect.New(f.Type.Elem()))
+						anonPtr = anonPtr.Elem()
+					}
+					return innerGet(anonPtr)
+				}
+				each(key, df)
+			})
 			continue
 		}
 		tagStr := f.Tag.Get("bencode")
@@ -278,78 +281,104 @@ func parseStructFields(struct_ reflect.Type, each func(string, structField)) {
 		if key == "" {
 			key = f.Name
 		}
-		each(key, structField{f, tag})
+		each(key, dictField{f.Type, func(value reflect.Value) func(reflect.Value) {
+			return value.Field(i).Set
+		}, tag})
 	}
 }
 
 func saveStructFields(struct_ reflect.Type) {
-	m := make(map[string]structField)
-	parseStructFields(struct_, func(key string, sf structField) {
+	m := make(map[string]dictField)
+	parseStructFields(struct_, func(key string, sf dictField) {
 		m[key] = sf
 	})
 	structFields[struct_] = m
 }
 
-func getStructFieldForKey(struct_ reflect.Type, key string) (f structField, ok bool) {
+func getStructFieldForKey(struct_ reflect.Type, key string) (f dictField) {
 	structFieldsMu.Lock()
 	if _, ok := structFields[struct_]; !ok {
 		saveStructFields(struct_)
 	}
-	f, ok = structFields[struct_][key]
+	f, ok := structFields[struct_][key]
 	structFieldsMu.Unlock()
+	if !ok {
+		var discard interface{}
+		return dictField{
+			Type: reflect.TypeOf(discard),
+			Get:  func(reflect.Value) func(reflect.Value) { return func(reflect.Value) {} },
+			Tags: nil,
+		}
+	}
 	return
 }
 
 func (d *Decoder) parseDict(v reflect.Value) error {
-	// so, at this point 'd' byte was consumed, let's just read key/value
-	// pairs one by one
+	// At this point 'd' byte was consumed, now read key/value pairs
 	for {
 		var keyStr string
 		keyValue := reflect.ValueOf(&keyStr).Elem()
 		ok, err := d.parseValue(keyValue)
 		if err != nil {
-			return fmt.Errorf("error parsing dict key: %s", err)
+			return fmt.Errorf("error parsing dict key: %w", err)
 		}
 		if !ok {
 			return nil
 		}
 
-		df := getDictField(v, keyStr)
+		df, err := getDictField(v.Type(), keyStr)
+		if err != nil {
+			return fmt.Errorf("parsing bencode dict into %v: %w", v.Type(), err)
+		}
 
 		// now we need to actually parse it
-		if df.Ok {
-			// log.Printf("parsing ok struct field for key %q", keyStr)
-			ok, err = d.parseValue(df.Value)
-		} else {
+		if df.Type == nil {
 			// Discard the value, there's nowhere to put it.
 			var if_ interface{}
 			if_, ok = d.parseValueInterface()
 			if if_ == nil {
-				err = fmt.Errorf("error parsing value for key %q", keyStr)
+				return fmt.Errorf("error parsing value for key %q", keyStr)
 			}
+			if !ok {
+				return fmt.Errorf("missing value for key %q", keyStr)
+			}
+			continue
 		}
+		setValue := reflect.New(df.Type).Elem()
+		// log.Printf("parsing into %v", setValue.Type())
+		ok, err = d.parseValue(setValue)
 		if err != nil {
-			if _, ok := err.(*UnmarshalTypeError); !ok || !df.IgnoreUnmarshalTypeError {
-				return fmt.Errorf("parsing value for key %q: %s", keyStr, err)
+			var target *UnmarshalTypeError
+			if !(errors.As(err, &target) && df.Tags.IgnoreUnmarshalTypeError()) {
+				return fmt.Errorf("parsing value for key %q: %w", keyStr, err)
 			}
 		}
 		if !ok {
 			return fmt.Errorf("missing value for key %q", keyStr)
 		}
-		if df.Ok {
-			df.Set()
-		}
+		df.Get(v)(setValue)
 	}
 }
 
 func (d *Decoder) parseList(v reflect.Value) error {
 	switch v.Kind() {
-	case reflect.Array, reflect.Slice:
 	default:
-		panic(&UnmarshalTypeError{
-			Value: "array",
-			Type:  v.Type(),
-		})
+		// If the list is a singleton of the expected type, use that value. See
+		// https://github.com/anacrolix/torrent/issues/297.
+		l := reflect.New(reflect.SliceOf(v.Type()))
+		if err := d.parseList(l.Elem()); err != nil {
+			return err
+		}
+		if l.Elem().Len() != 1 {
+			return &UnmarshalTypeError{
+				BencodeTypeName:     "list",
+				UnmarshalTargetType: v.Type(),
+			}
+		}
+		v.Set(l.Elem().Index(0))
+		return nil
+	case reflect.Array, reflect.Slice:
+		// We can work with this. Normal case, fallthrough.
 	}
 
 	i := 0
@@ -439,7 +468,6 @@ func (d *Decoder) readOneValue() bool {
 	}
 
 	return true
-
 }
 
 func (d *Decoder) parseUnmarshaler(v reflect.Value) bool {
@@ -500,8 +528,7 @@ func (d *Decoder) parseValue(v reflect.Value) (bool, error) {
 	case 'l':
 		return true, d.parseList(v)
 	case 'i':
-		d.parseInt(v)
-		return true, nil
+		return true, d.parseInt(v)
 	default:
 		if b >= '0' && b <= '9' {
 			// It's a string.
@@ -583,28 +610,21 @@ func (d *Decoder) parseIntInterface() (ret interface{}) {
 	return
 }
 
-func (d *Decoder) parseStringInterface() interface{} {
-	start := d.Offset - 1
-
+func (d *Decoder) parseStringInterface() string {
 	// read the string length first
 	d.readUntil(':')
-	length, err := strconv.ParseInt(d.buf.String(), 10, 64)
-	checkForIntParseError(err, start)
-
-	d.buf.Reset()
-	n, err := io.CopyN(&d.buf, d.r, length)
-	d.Offset += n
+	length, err := strconv.ParseInt(bytesAsString(d.buf.Bytes()), 10, 32)
 	if err != nil {
-		checkForUnexpectedEOF(err, d.Offset)
-		panic(&SyntaxError{
-			Offset: d.Offset,
-			What:   errors.New("unexpected I/O error: " + err.Error()),
-		})
+		panic(&SyntaxError{Offset: d.Offset - 1, What: err})
 	}
-
-	s := d.buf.String()
 	d.buf.Reset()
-	return s
+	b := make([]byte, length)
+	n, err := io.ReadFull(d.r, b)
+	d.Offset += int64(n)
+	if err != nil {
+		panic(&SyntaxError{Offset: d.Offset, What: err})
+	}
+	return bytesAsString(b)
 }
 
 func (d *Decoder) parseDictInterface() interface{} {
@@ -633,18 +653,12 @@ func (d *Decoder) parseDictInterface() interface{} {
 	return dict
 }
 
-func (d *Decoder) parseListInterface() interface{} {
-	var list []interface{}
-	for {
-		valuei, ok := d.parseValueInterface()
-		if !ok {
-			break
-		}
-
+func (d *Decoder) parseListInterface() (list []interface{}) {
+	list = []interface{}{}
+	valuei, ok := d.parseValueInterface()
+	for ok {
 		list = append(list, valuei)
+		valuei, ok = d.parseValueInterface()
 	}
-	if list == nil {
-		list = make([]interface{}, 0, 0)
-	}
-	return list
+	return
 }

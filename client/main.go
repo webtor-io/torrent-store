@@ -8,22 +8,33 @@ import (
 	"time"
 
 	"github.com/urfave/cli"
-	pb "github.com/webtor-io/torrent-store/torrent-store"
+	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc"
 )
 
-func push(c pb.TorrentStoreClient, path string, expire int) error {
+func push(c pb.TorrentStoreClient, path string) error {
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, err := c.Push(ctx, &pb.PushRequest{Torrent: bytes, Expire: int32(expire)})
+	r, err := c.Push(ctx, &pb.PushRequest{Torrent: bytes})
 	if err != nil {
 		return err
 	}
 	fmt.Println(r.InfoHash)
+	return nil
+}
+
+func touch(c pb.TorrentStoreClient, infoHash string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, err := c.Touch(ctx, &pb.TouchRequest{InfoHash: infoHash})
+	if err != nil {
+		return err
+	}
+	fmt.Println("Touched")
 	return nil
 }
 
@@ -38,6 +49,7 @@ func pull(c pb.TorrentStoreClient, infoHash string, path string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println("Pulled")
 	return nil
 }
 
@@ -54,7 +66,7 @@ func withClient(host string, port int, action func(c pb.TorrentStoreClient) erro
 
 func main() {
 	app := cli.NewApp()
-	app.Name = "torrent-store-client-cli"
+	app.Name = "torrent-store-client"
 	app.Usage = "interacts with torrent store"
 	app.Version = "0.0.1"
 	app.Flags = []cli.Flag{
@@ -73,6 +85,22 @@ func main() {
 	}
 	app.Commands = []cli.Command{
 		{
+			Name:    "touch",
+			Aliases: []string{"to"},
+			Usage:   "touches torrent",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "hash, ha",
+					Usage: "info hash of the torrent file",
+				},
+			},
+			Action: func(ctx *cli.Context) error {
+				return withClient(ctx.GlobalString("host"), ctx.GlobalInt("port"), func(c pb.TorrentStoreClient) error {
+					return touch(c, ctx.String("hash"))
+				})
+			},
+		},
+		{
 			Name:    "push",
 			Aliases: []string{"ps"},
 			Usage:   "pushes torrent to the store",
@@ -81,14 +109,10 @@ func main() {
 					Name:  "input, i",
 					Usage: "path to the input torrent file",
 				},
-				cli.IntFlag{
-					Name:  "expire, e",
-					Usage: "expiration period in seconds",
-				},
 			},
 			Action: func(ctx *cli.Context) error {
 				return withClient(ctx.GlobalString("host"), ctx.GlobalInt("port"), func(c pb.TorrentStoreClient) error {
-					return push(c, ctx.String("input"), ctx.Int("expire"))
+					return push(c, ctx.String("input"))
 				})
 			},
 		},
