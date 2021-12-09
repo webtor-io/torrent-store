@@ -67,11 +67,13 @@ func (s *Store) push(h string, torrent []byte) (val interface{}, err error) {
 
 func (s *Store) touch(h string) (val interface{}, err error) {
 	s.touchm.Touch(h)
+
 	for _, v := range s.providers {
 		t := time.Now()
 		err = v.Touch(h)
 		if err == ErrNotFound {
 			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider not touched")
+			return nil, err
 		} else if err != nil {
 			return nil, err
 		}
