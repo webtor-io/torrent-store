@@ -57,6 +57,20 @@ func (s *S3) Name() string {
 }
 
 func (s *S3) Touch(h string) (err error) {
+	cl := s.cl.Get()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(h),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return ss.ErrNotFound
+		}
+		return err
+	}
+	defer r.Body.Close()
 	return nil
 }
 
