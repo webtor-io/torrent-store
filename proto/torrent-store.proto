@@ -1,9 +1,5 @@
 syntax = "proto3";
 
-option go_package = "github.com/webtor-io/torrent-store;torrent_store";
-
-package webtor.torrent_store;
-
 service TorrentStore {
   // Pushes torrent to the store
   rpc Push (PushRequest) returns (PushReply) {}
