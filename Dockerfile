@@ -20,8 +20,8 @@ FROM alpine:latest
 # copy our static linked library
 COPY --from=build /app/server .
 
-# tell we are exposing our service on ports 8081 50051
-EXPOSE 8081 50051
+# tell we are exposing our service on ports 8081 8082 50051
+EXPOSE 8081 8082 50051
 
 # run it!
 CMD ["./server", "serve"]
