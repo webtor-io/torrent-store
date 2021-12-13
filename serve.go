@@ -1,7 +1,9 @@
 package main
 
 import (
+	"net"
 	"net/http"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -60,8 +62,24 @@ func serve(c *cli.Context) error {
 		providers = append(providers, redis)
 	}
 
+	// Setting HTTP Client
+	myTransport := &http.Transport{
+		MaxIdleConns:        500,
+		MaxIdleConnsPerHost: 500,
+		MaxConnsPerHost:     500,
+		IdleConnTimeout:     90 * time.Second,
+		Dial: (&net.Dialer{
+			Timeout:   1 * time.Minute,
+			KeepAlive: 1 * time.Minute,
+		}).Dial,
+	}
+	cl := &http.Client{
+		Timeout:   1 * time.Minute,
+		Transport: myTransport,
+	}
+
 	// Setting S3 Client
-	s3Cl := cs.NewS3Client(c, http.DefaultClient)
+	s3Cl := cs.NewS3Client(c, cl)
 
 	// Setting S3 Provider
 	s3 := p.NewS3(c, s3Cl)
