@@ -29,7 +29,7 @@ type Badger struct {
 }
 
 func NewBadger(c *cli.Context) *Badger {
-	opt := badger.DefaultOptions("").WithInMemory(true)
+	opt := badger.DefaultOptions("/tmp/badger")
 	db, _ := badger.Open(opt)
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
