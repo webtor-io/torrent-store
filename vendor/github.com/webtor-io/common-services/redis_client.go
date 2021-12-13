@@ -50,7 +50,7 @@ func (s *RedisClient) Close() {
 func (s *RedisClient) get() redis.UniversalClient {
 	if s.sentinelPort != 0 {
 		addrs := []string{fmt.Sprintf("%s:%d", s.host, s.sentinelPort)}
-		log.Infof("Using sentinel redis client with addrs=%v and master name=%v", addrs, s.sentinelMasterName)
+		log.Infof("using sentinel redis client with addrs=%v and master name=%v", addrs, s.sentinelMasterName)
 		return redis.NewUniversalClient(&redis.UniversalOptions{
 			Addrs:        addrs,
 			Password:     "",
@@ -63,7 +63,7 @@ func (s *RedisClient) get() redis.UniversalClient {
 		})
 	}
 	addrs := []string{fmt.Sprintf("%s:%d", s.host, s.port)}
-	log.Infof("Using default redis client with addrs=%v", addrs)
+	log.Infof("using default redis client with addrs=%v", addrs)
 	return redis.NewUniversalClient(&redis.UniversalOptions{
 		Addrs:        addrs,
 		Password:     "",

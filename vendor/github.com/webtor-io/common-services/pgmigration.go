@@ -21,11 +21,11 @@ func (s *PGMigration) Run(a ...string) error {
 	col.DiscoverSQLMigrations("migrations")
 	_, _, err := col.Run(db, "init")
 	if err != nil {
-		return errors.Wrap(err, "Failed to init DB PGMigrations")
+		return errors.Wrap(err, "failed to init DB PGMigrations")
 	}
 	oldVersion, newVersion, err := col.Run(db, a...)
 	if err != nil {
-		return errors.Wrap(err, "Failed to perform PGMigration")
+		return errors.Wrap(err, "failed to perform PGMigration")
 	}
 	if newVersion != oldVersion {
 		log.Infof("DB migrated from version %d to %d", oldVersion, newVersion)

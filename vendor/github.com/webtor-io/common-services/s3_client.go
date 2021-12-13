@@ -93,7 +93,7 @@ func (s *S3Client) Get() *s3.S3 {
 }
 
 func (s *S3Client) get() *s3.S3 {
-	log.Info("Initializing S3")
+	log.Info("initializing S3")
 	c := &aws.Config{
 		Credentials:      credentials.NewStaticCredentials(s.accessKeyID, s.secretAccessKey, ""),
 		Endpoint:         aws.String(s.endpoint),
