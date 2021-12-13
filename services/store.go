@@ -31,7 +31,7 @@ var (
 func NewStore(providers []StoreProvider) *Store {
 	cfg := &lazymap.Config{
 		ErrorExpire: 10 * time.Second,
-		Expire:      10 * time.Minute,
+		Expire:      time.Minute,
 	}
 	pullm := lazymap.New(cfg)
 	pushm := lazymap.New(cfg)

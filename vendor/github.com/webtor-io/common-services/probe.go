@@ -48,7 +48,7 @@ func (s *Probe) Serve() error {
 	addr := fmt.Sprintf("%s:%d", s.host, s.port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return errors.Wrap(err, "Failed to probe listen to tcp connection")
+		return errors.Wrap(err, "failed to probe listen to tcp connection")
 	}
 	s.ln = ln
 	mux := http.NewServeMux()
@@ -58,7 +58,7 @@ func (s *Probe) Serve() error {
 	mux.HandleFunc("/readiness", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 	})
-	log.Infof("Serving Probe at %v", addr)
+	log.Infof("serving probe at %v", addr)
 	return http.Serve(ln, mux)
 }
 

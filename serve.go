@@ -25,6 +25,7 @@ func configureServe(c *cli.Command) {
 	c.Flags = cs.RegisterProbeFlags(c.Flags)
 	c.Flags = cs.RegisterS3ClientFlags(c.Flags)
 	c.Flags = cs.RegisterRedisClientFlags(c.Flags)
+	c.Flags = cs.RegisterPprofFlags(c.Flags)
 	c.Flags = s.RegisterGRPCFlags(c.Flags)
 	c.Flags = p.RegisterBadgerFlags(c.Flags)
 	c.Flags = p.RegisterRedisFlags(c.Flags)
@@ -37,6 +38,10 @@ func serve(c *cli.Context) error {
 	// Setting Probe
 	probe := cs.NewProbe(c)
 	defer probe.Close()
+
+	// Setting Pprof
+	pprof := cs.NewPprof(c)
+	defer pprof.Close()
 
 	providers := []s.StoreProvider{}
 
@@ -81,7 +86,7 @@ func serve(c *cli.Context) error {
 	defer grpcServer.Close()
 
 	// Setting ServeService
-	serve := cs.NewServe(probe, grpcServer)
+	serve := cs.NewServe(probe, pprof, grpcServer)
 
 	// And SERVE!
 	err := serve.Serve()

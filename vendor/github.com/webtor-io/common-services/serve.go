@@ -40,12 +40,12 @@ func (s *Serve) Serve() error {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	select {
 	case sig := <-sigs:
-		log.WithField("signal", sig).Info("Got syscall")
+		log.WithField("signal", sig).Info("got syscall")
 	case err := <-serveError:
 		if err != nil {
-			return errors.Wrap(err, "Got serve error")
+			return errors.Wrap(err, "got serve error")
 		}
 	}
-	log.Info("Shuting down... at last!")
+	log.Info("shuting down... at last!")
 	return nil
 }

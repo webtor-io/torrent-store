@@ -40,7 +40,7 @@ func NewAbuse(c *cli.Context, cl *AbuseClient) *Abuse {
 	return &Abuse{
 		cl: cl,
 		LazyMap: lazymap.New(&lazymap.Config{
-			Expire:      10 * time.Minute,
+			Expire:      time.Minute,
 			ErrorExpire: 10 * time.Second,
 		}),
 	}
