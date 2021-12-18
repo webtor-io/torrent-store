@@ -69,12 +69,12 @@ func serve(c *cli.Context) error {
 		MaxConnsPerHost:     500,
 		IdleConnTimeout:     90 * time.Second,
 		Dial: (&net.Dialer{
-			Timeout:   5 * time.Second,
+			Timeout:   10 * time.Second,
 			KeepAlive: 15 * time.Minute,
 		}).Dial,
 	}
 	cl := &http.Client{
-		Timeout:   5 * time.Second,
+		Timeout:   10 * time.Second,
 		Transport: myTransport,
 	}
 
