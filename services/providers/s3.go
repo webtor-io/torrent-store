@@ -58,7 +58,7 @@ func (s *S3) Name() string {
 
 func (s *S3) Touch(h string) (err error) {
 	cl := s.cl.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
@@ -82,7 +82,7 @@ func (s *S3) makeAWSMD5(b []byte) *string {
 
 func (s *S3) Push(h string, torrent []byte) (err error) {
 	cl := s.cl.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_, err = cl.PutObjectWithContext(ctx,
 		&s3.PutObjectInput{
@@ -96,7 +96,7 @@ func (s *S3) Push(h string, torrent []byte) (err error) {
 
 func (s *S3) Pull(h string) (torrent []byte, err error) {
 	cl := s.cl.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
