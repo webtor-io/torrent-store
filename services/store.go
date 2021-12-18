@@ -75,7 +75,8 @@ func (s *Store) touch(h string) (val interface{}, err error) {
 			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider not touched")
 			continue
 		} else if err != nil {
-			return nil, err
+			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).WithError(err).Warn("provider has error")
+			continue
 		}
 		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider touch")
 		if i > 0 {
@@ -101,7 +102,8 @@ func (s *Store) pull(h string, start int) (torrent []byte, err error) {
 				log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).Info("provider push")
 				err = s.providers[j].Push(h, torrent)
 				if err != nil {
-					return nil, err
+					log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[j].Name()).WithError(err).Warn("provider not pushed")
+					continue
 				}
 			}
 		}
