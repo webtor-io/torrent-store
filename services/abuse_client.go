@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/urfave/cli"
-	as "github.com/webtor-io/abuse-store/abuse-store"
+	as "github.com/webtor-io/abuse-store/proto"
 	"google.golang.org/grpc"
 )
 
@@ -63,6 +63,6 @@ func (s *AbuseClient) Get() (as.AbuseStoreClient, error) {
 
 func (s *AbuseClient) Close() {
 	if s.conn != nil {
-		s.conn.Close()
+		_ = s.conn.Close()
 	}
 }
