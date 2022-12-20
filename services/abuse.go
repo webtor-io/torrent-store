@@ -6,7 +6,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
-	as "github.com/webtor-io/abuse-store/abuse-store"
+	as "github.com/webtor-io/abuse-store/proto"
 	"github.com/webtor-io/lazymap"
 )
 
