@@ -34,9 +34,15 @@ func configureServe(c *cli.Command) {
 	c.Flags = p.RegisterS3Flags(c.Flags)
 	c.Flags = s.RegisterAbuseClientFlags(c.Flags)
 	c.Flags = s.RegisterAbuseFlags(c.Flags)
+	c.Flags = s.RegisterStoplistFlags(c.Flags)
 }
 
-func serve(c *cli.Context) error {
+func serve(c *cli.Context) (err error) {
+	stoplist, err := s.NewStoplist(c)
+	if err != nil {
+		return
+	}
+
 	// Setting Probe
 	probe := cs.NewProbe(c)
 	defer probe.Close()
@@ -45,7 +51,7 @@ func serve(c *cli.Context) error {
 	pprof := cs.NewPprof(c)
 	defer pprof.Close()
 
-	providers := []s.StoreProvider{}
+	var providers []s.StoreProvider
 
 	// Setting Badger Provider
 	badger := p.NewBadger(c)
@@ -97,7 +103,7 @@ func serve(c *cli.Context) error {
 	abuse := s.NewAbuse(c, aCl)
 
 	// Setting Server
-	server := s.NewServer(store, abuse)
+	server := s.NewServer(store, abuse, stoplist)
 
 	// Setting GRPC Server
 	grpcServer := s.NewGRPCServer(c, server)
@@ -107,9 +113,9 @@ func serve(c *cli.Context) error {
 	serve := cs.NewServe(probe, pprof, grpcServer)
 
 	// And SERVE!
-	err := serve.Serve()
+	err = serve.Serve()
 	if err != nil {
 		log.WithError(err).Error("got server error")
 	}
-	return err
+	return
 }

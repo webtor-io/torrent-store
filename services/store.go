@@ -36,7 +36,7 @@ func NewStore(providers []StoreProvider) *Store {
 	pullm := lazymap.New(cfg)
 	pushm := lazymap.New(cfg)
 	touchm := lazymap.New(cfg)
-	revProviders := []StoreProvider{}
+	var revProviders []StoreProvider
 	for _, p := range providers {
 		log.WithField("provider", p.Name()).Info("use provider")
 
