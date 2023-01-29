@@ -1,5 +1,4 @@
 syntax = "proto3";
-package webtor.torrent_store;
 
 service TorrentStore {
   // Pushes torrent to the store
