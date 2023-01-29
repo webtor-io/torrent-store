@@ -15,12 +15,17 @@ import (
 
 type Server struct {
 	pb.UnimplementedTorrentStoreServer
-	s *Store
-	a *Abuse
+	s  *Store
+	a  *Abuse
+	sl *Stoplist
 }
 
-func NewServer(s *Store, a *Abuse) *Server {
-	return &Server{s: s, a: a}
+func NewServer(s *Store, a *Abuse, sl *Stoplist) *Server {
+	return &Server{
+		s:  s,
+		a:  a,
+		sl: sl,
+	}
 }
 
 func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, error) {
@@ -45,8 +50,28 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to pull")
 		return nil, errors.Wrapf(err, "failed to pull torrent infoHash=%v", in.GetInfoHash())
 	}
+	err = s.checkStoplist(torrent, log, t, in.GetInfoHash())
+	if err != nil {
+		return nil, err
+	}
 	log.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
 	return &pb.PullReply{Torrent: []byte(torrent)}, nil
+}
+
+func (s *Server) checkStoplist(torrent []byte, log *log.Entry, t time.Time, hash string) error {
+	if s.sl == nil {
+		return nil
+	}
+	cr, err := s.sl.Check(torrent)
+	if err != nil {
+		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to check stoplist")
+		return errors.Wrapf(err, "failed to check stoplist infoHash=%v", hash)
+	}
+	if cr.Found {
+		log.WithField("duration", time.Since(t)).Warnf("found in stoplist %v", cr.String())
+		return status.Errorf(codes.PermissionDenied, "Found in stoplist infoHash=%v", hash)
+	}
+	return nil
 }
 
 func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, error) {
@@ -60,6 +85,11 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	infoHash := mi.HashInfoBytes().HexString()
 	log := log.WithField("infoHash", infoHash)
 	log.Info("push torrent request")
+
+	err = s.checkStoplist(in.GetTorrent(), log, t, infoHash)
+	if err != nil {
+		return nil, err
+	}
 
 	err = s.isAbused(infoHash)
 	if err == ErrAbuse {
@@ -92,16 +122,7 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 	log := log.WithField("infoHash", infoHash)
 	log.Info("touch torrent request")
 
-	err := s.isAbused(infoHash)
-	if err == ErrAbuse {
-		log.WithField("duration", time.Since(t)).Warn("abused")
-		return nil, status.Errorf(codes.PermissionDenied, "Restricted by the rightholder infoHash=%v", in.GetInfoHash())
-	} else if err != nil {
-		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to check abuse")
-		return nil, errors.Wrapf(err, "failed to check abuse infoHash=%v", infoHash)
-	}
-
-	err = s.s.Touch(infoHash)
+	err := s.s.Touch(infoHash)
 	if err == ErrNotFound {
 		log.WithField("duration", time.Since(t)).Info("torrent not found")
 		return nil, status.Errorf(codes.NotFound, "torrent not found infoHash=%v", infoHash)
@@ -109,6 +130,7 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to touch")
 		return nil, errors.Wrapf(err, "failed to touch torrent infoHash=%v", infoHash)
 	}
+
 	log.WithField("duration", time.Since(t)).Info("sending touch reply")
 	return &pb.TouchReply{}, nil
 }
