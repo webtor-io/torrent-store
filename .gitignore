@@ -18,3 +18,4 @@ torrent-store
 client/client
 
 .DS_Store
+.env
