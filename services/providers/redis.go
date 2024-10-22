@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"context"
+	"github.com/pkg/errors"
 	"time"
 
 	"github.com/go-redis/redis"
@@ -49,10 +51,10 @@ func (s *Redis) Name() string {
 	return "redis"
 }
 
-func (s *Redis) Touch(h string) (err error) {
+func (s *Redis) Touch(ctx context.Context, h string) (err error) {
 	cl := s.cl.Get()
 
-	res, err := cl.Expire(h, s.exp).Result()
+	res, err := cl.Expire(ctx, h, s.exp).Result()
 
 	if err != nil {
 		return err
@@ -63,16 +65,18 @@ func (s *Redis) Touch(h string) (err error) {
 	return nil
 }
 
-func (s *Redis) Push(h string, torrent []byte) (err error) {
+func (s *Redis) Push(ctx context.Context, h string, torrent []byte) (err error) {
 	cl := s.cl.Get()
-	return cl.Set(h, torrent, s.exp).Err()
+	return cl.Set(ctx, h, torrent, s.exp).Err()
 }
 
-func (s *Redis) Pull(h string) (torrent []byte, err error) {
+func (s *Redis) Pull(ctx context.Context, h string) (torrent []byte, err error) {
 	cl := s.cl.Get()
-	torrent, err = cl.Get(h).Bytes()
-	if err == redis.Nil {
+	torrent, err = cl.Get(ctx, h).Bytes()
+	if errors.Is(err, redis.Nil) {
 		return nil, ss.ErrNotFound
 	}
 	return
 }
+
+var _ ss.StoreProvider = (*Redis)(nil)

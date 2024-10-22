@@ -1,6 +1,8 @@
 package providers
 
 import (
+	"context"
+	"github.com/pkg/errors"
 	"time"
 
 	badger "github.com/dgraph-io/badger/v3"
@@ -50,10 +52,10 @@ func (s *Badger) Name() string {
 	return "badger"
 }
 
-func (s *Badger) Touch(h string) (err error) {
+func (s *Badger) Touch(_ context.Context, h string) (err error) {
 	err = s.db.Update(func(txn *badger.Txn) error {
 		i, err := txn.Get([]byte(h))
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ss.ErrNotFound
 
 		} else {
@@ -67,7 +69,7 @@ func (s *Badger) Touch(h string) (err error) {
 	return
 }
 
-func (s *Badger) Push(h string, torrent []byte) (err error) {
+func (s *Badger) Push(_ context.Context, h string, torrent []byte) (err error) {
 	err = s.db.Update(func(txn *badger.Txn) error {
 		e := badger.NewEntry([]byte(h), torrent).WithTTL(s.exp)
 		return txn.SetEntry(e)
@@ -75,10 +77,10 @@ func (s *Badger) Push(h string, torrent []byte) (err error) {
 	return
 }
 
-func (s *Badger) Pull(h string) (torrent []byte, err error) {
+func (s *Badger) Pull(_ context.Context, h string) (torrent []byte, err error) {
 	err = s.db.View(func(txn *badger.Txn) (err error) {
 		i, err := txn.Get([]byte(h))
-		if err == badger.ErrKeyNotFound {
+		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ss.ErrNotFound
 		} else {
 			err = i.Value(func(val []byte) error {
@@ -92,5 +94,7 @@ func (s *Badger) Pull(h string) (torrent []byte, err error) {
 }
 
 func (s *Badger) Close() {
-	s.db.Close()
+	_ = s.db.Close()
 }
+
+var _ ss.StoreProvider = (*Badger)(nil)

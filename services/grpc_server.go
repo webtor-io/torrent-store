@@ -66,6 +66,6 @@ func (s *GRPCServer) Serve() error {
 
 func (s *GRPCServer) Close() {
 	if s.ln != nil {
-		s.ln.Close()
+		_ = s.ln.Close()
 	}
 }
