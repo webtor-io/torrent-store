@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"time"
 
 	"github.com/pkg/errors"
@@ -10,9 +11,9 @@ import (
 )
 
 type StoreProvider interface {
-	Push(h string, torrent []byte) (err error)
-	Pull(h string) (torrent []byte, err error)
-	Touch(h string) (err error)
+	Push(ctx context.Context, h string, torrent []byte) (err error)
+	Pull(ctx context.Context, h string) (torrent []byte, err error)
+	Touch(ctx context.Context, h string) (err error)
 	Name() string
 }
 
@@ -53,10 +54,10 @@ func NewStore(providers []StoreProvider) *Store {
 	}
 }
 
-func (s *Store) push(h string, torrent []byte) (val interface{}, err error) {
+func (s *Store) push(ctx context.Context, h string, torrent []byte) (val interface{}, err error) {
 	for _, v := range s.revProviders {
 		t := time.Now()
-		err = v.Push(h, torrent)
+		err = v.Push(ctx, h, torrent)
 		if err != nil {
 			return nil, err
 		}
@@ -65,13 +66,13 @@ func (s *Store) push(h string, torrent []byte) (val interface{}, err error) {
 	return
 }
 
-func (s *Store) touch(h string) (val interface{}, err error) {
+func (s *Store) touch(ctx context.Context, h string) (val interface{}, err error) {
 	s.touchm.Touch(h)
 
 	for i, v := range s.providers {
 		t := time.Now()
-		err = v.Touch(h)
-		if err == ErrNotFound {
+		err = v.Touch(ctx, h)
+		if errors.Is(err, ErrNotFound) {
 			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider not touched")
 			continue
 		} else if err != nil {
@@ -80,18 +81,18 @@ func (s *Store) touch(h string) (val interface{}, err error) {
 		}
 		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider touch")
 		if i > 0 {
-			go s.pull(h, i)
+			go s.pull(ctx, h, i)
 		}
 		break
 	}
 	return
 }
 
-func (s *Store) pull(h string, start int) (torrent []byte, err error) {
+func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, err error) {
 	for i := start; i < len(s.providers); i++ {
 		t := time.Now()
-		torrent, err = s.providers[i].Pull(h)
-		if err == ErrNotFound {
+		torrent, err = s.providers[i].Pull(ctx, h)
+		if errors.Is(err, ErrNotFound) {
 			continue
 		} else if err != nil {
 			return
@@ -100,7 +101,7 @@ func (s *Store) pull(h string, start int) (torrent []byte, err error) {
 		if torrent != nil {
 			for j := 0; j < i; j++ {
 				log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).Info("provider push")
-				err = s.providers[j].Push(h, torrent)
+				err = s.providers[j].Push(ctx, h, torrent)
 				if err != nil {
 					log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[j].Name()).WithError(err).Warn("provider not pushed")
 					continue
@@ -112,9 +113,9 @@ func (s *Store) pull(h string, start int) (torrent []byte, err error) {
 	return
 }
 
-func (s *Store) Pull(h string) (torrent []byte, err error) {
+func (s *Store) Pull(ctx context.Context, h string) (torrent []byte, err error) {
 	v, err := s.pullm.Get(h, func() (interface{}, error) {
-		return s.pull(h, 0)
+		return s.pull(ctx, h, 0)
 	})
 	if err != nil {
 		return nil, err
@@ -123,16 +124,16 @@ func (s *Store) Pull(h string) (torrent []byte, err error) {
 	return
 }
 
-func (s *Store) Push(h string, torrent []byte) (err error) {
+func (s *Store) Push(ctx context.Context, h string, torrent []byte) (err error) {
 	_, err = s.pushm.Get(h, func() (interface{}, error) {
-		return s.push(h, torrent)
+		return s.push(ctx, h, torrent)
 	})
 	return err
 }
 
-func (s *Store) Touch(h string) (err error) {
+func (s *Store) Touch(ctx context.Context, h string) (err error) {
 	_, err = s.touchm.Get(h, func() (interface{}, error) {
-		return s.touch(h)
+		return s.touch(ctx, h)
 	})
 	return err
 }

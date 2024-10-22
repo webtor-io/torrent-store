@@ -5,15 +5,13 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/base64"
-	"io"
-	"time"
-
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
 	ss "github.com/webtor-io/torrent-store/services"
+	"io"
 )
 
 const (
@@ -56,10 +54,8 @@ func (s *S3) Name() string {
 	return "s3"
 }
 
-func (s *S3) Touch(h string) (err error) {
+func (s *S3) Touch(ctx context.Context, h string) (err error) {
 	cl := s.cl.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(h),
@@ -70,7 +66,9 @@ func (s *S3) Touch(h string) (err error) {
 		}
 		return err
 	}
-	defer r.Body.Close()
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
 	return nil
 }
 
@@ -80,10 +78,8 @@ func (s *S3) makeAWSMD5(b []byte) *string {
 	return aws.String(m)
 }
 
-func (s *S3) Push(h string, torrent []byte) (err error) {
+func (s *S3) Push(ctx context.Context, h string, torrent []byte) (err error) {
 	cl := s.cl.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	_, err = cl.PutObjectWithContext(ctx,
 		&s3.PutObjectInput{
 			Bucket:     aws.String(s.bucket),
@@ -94,10 +90,8 @@ func (s *S3) Push(h string, torrent []byte) (err error) {
 	return
 }
 
-func (s *S3) Pull(h string) (torrent []byte, err error) {
+func (s *S3) Pull(ctx context.Context, h string) (torrent []byte, err error) {
 	cl := s.cl.Get()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(h),
@@ -108,6 +102,10 @@ func (s *S3) Pull(h string) (torrent []byte, err error) {
 		}
 		return nil, err
 	}
-	defer r.Body.Close()
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
 	return io.ReadAll(r.Body)
 }
+
+var _ ss.StoreProvider = (*S3)(nil)
