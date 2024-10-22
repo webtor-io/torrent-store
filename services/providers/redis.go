@@ -3,9 +3,9 @@ package providers
 import (
 	"context"
 	"github.com/pkg/errors"
+	"github.com/redis/go-redis/v9"
 	"time"
 
-	"github.com/go-redis/redis"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
 	ss "github.com/webtor-io/torrent-store/services"
