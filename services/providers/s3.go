@@ -55,20 +55,20 @@ func (s *S3) Name() string {
 }
 
 func (s *S3) Touch(ctx context.Context, h string) (err error) {
-	cl := s.cl.Get()
-	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(h),
-	})
-	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
-			return ss.ErrNotFound
-		}
-		return err
-	}
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(r.Body)
+	//cl := s.cl.Get()
+	//r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
+	//	Bucket: aws.String(s.bucket),
+	//	Key:    aws.String(h),
+	//})
+	//if err != nil {
+	//	if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+	//		return ss.ErrNotFound
+	//	}
+	//	return err
+	//}
+	//defer func(Body io.ReadCloser) {
+	//	_ = Body.Close()
+	//}(r.Body)
 	return nil
 }
 
