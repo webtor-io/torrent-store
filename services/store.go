@@ -82,6 +82,9 @@ func (s *Store) checkRate(h string) bool {
 
 func (s *Store) incRate(h string) {
 	a := s.getRate(h)
+	if a.Load() > 15 {
+		return
+	}
 	go func() {
 		<-time.After(time.Minute)
 		a.Add(-1)
