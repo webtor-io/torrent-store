@@ -359,6 +359,8 @@ github.com/webtor-io/common-services v0.0.0-20241022160325-d391acd827ab h1:71AxB
 github.com/webtor-io/common-services v0.0.0-20241022160325-d391acd827ab/go.mod h1:6jUeO6R+ytZnEJj7PlcLEQZfWaxw8ovav73BP83MTlI=
 github.com/webtor-io/lazymap v0.0.0-20221030185154-1799721becef h1:tSAcIGxgmsxFJnLRyTkhzFhjGAtaOZ5g2osBHG3JYBs=
 github.com/webtor-io/lazymap v0.0.0-20221030185154-1799721becef/go.mod h1:za/bioTGK3VjG3+mK7/kpx0TV8++ytZkdOQ1MJ2HTjM=
+github.com/webtor-io/lazymap v0.0.0-20241211155941-e81d935cfa1d h1:Xi9E0LCDgK++QliA7ZNFdSI11Bpg5qe7efN3AMWJ3dY=
+github.com/webtor-io/lazymap v0.0.0-20241211155941-e81d935cfa1d/go.mod h1:kioEFK4hk8YfHrhg47tGvMG40xawOJM4gcfRQ4EeX4k=
 github.com/webtor-io/stoplist v0.0.0-20230128160543-ea87bdc34deb h1:RCjga119RT7hTqYeELSGPTVCYfMUIyaSyc2QCaDk/ik=
 github.com/webtor-io/stoplist v0.0.0-20230128160543-ea87bdc34deb/go.mod h1:nlKK64Domln2CfQUQiP2+RcbD0IQPjoBfHDYmiGLuqY=
 github.com/willf/bitset v1.1.9/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=

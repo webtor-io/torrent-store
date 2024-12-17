@@ -29,7 +29,7 @@ var (
 )
 
 type Abuse struct {
-	lazymap.LazyMap
+	lazymap.LazyMap[bool]
 	cl *AbuseClient
 }
 
@@ -39,36 +39,26 @@ func NewAbuse(c *cli.Context, cl *AbuseClient) *Abuse {
 	}
 	return &Abuse{
 		cl: cl,
-		LazyMap: lazymap.New(&lazymap.Config{
+		LazyMap: lazymap.New[bool](&lazymap.Config{
 			Expire:      time.Minute,
-			ErrorExpire: 10 * time.Second,
+			StoreErrors: false,
 		}),
 	}
 }
 
-func (s *Abuse) get(h string) error {
-	cl, err := s.cl.Get()
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	r, err := cl.Check(ctx, &as.CheckRequest{Infohash: h})
-	if err != nil {
-		return err
-	}
-	if r.GetExists() {
-		return ErrAbuse
-	}
-	return nil
-}
-
-func (s *Abuse) Get(h string) error {
-	_, err := s.LazyMap.Get(h, func() (interface{}, error) {
-		return nil, s.get(h)
+func (s *Abuse) Get(ctx context.Context, h string) (bool, error) {
+	return s.LazyMap.Get(h, func() (bool, error) {
+		cl, err := s.cl.Get()
+		if err != nil {
+			return false, err
+		}
+		r, err := cl.Check(ctx, &as.CheckRequest{Infohash: h})
+		if err != nil {
+			return false, err
+		}
+		if r.GetExists() {
+			return true, nil
+		}
+		return false, nil
 	})
-	if err != nil {
-		return err
-	}
-	return nil
 }
