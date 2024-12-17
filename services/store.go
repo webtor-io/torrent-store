@@ -98,6 +98,7 @@ func (s *Store) getRate(h string) *atomic.Int64 {
 
 func (s *Store) touch(ctx context.Context, h string) (ok bool, err error) {
 	if !s.checkRate(h) {
+		s.incRate(h)
 		log.WithField("infohash", h).Warn("get rate limit")
 		return false, ErrNotFound
 	}
@@ -128,6 +129,7 @@ func (s *Store) touch(ctx context.Context, h string) (ok bool, err error) {
 
 func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, err error) {
 	if !s.checkRate(h) {
+		s.incRate(h)
 		log.WithField("infohash", h).Warn("get rate limit")
 		return nil, ErrNotFound
 	}
