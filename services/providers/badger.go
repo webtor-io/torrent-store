@@ -52,12 +52,11 @@ func (s *Badger) Name() string {
 	return "badger"
 }
 
-func (s *Badger) Touch(_ context.Context, h string) (err error) {
+func (s *Badger) Touch(_ context.Context, h string) (ok bool, err error) {
 	err = s.db.Update(func(txn *badger.Txn) error {
 		i, err := txn.Get([]byte(h))
 		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ss.ErrNotFound
-
 		} else {
 			err = i.Value(func(val []byte) error {
 				e := badger.NewEntry([]byte(h), val).WithTTL(s.exp)
@@ -66,15 +65,21 @@ func (s *Badger) Touch(_ context.Context, h string) (err error) {
 			return err
 		}
 	})
-	return
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func (s *Badger) Push(_ context.Context, h string, torrent []byte) (err error) {
+func (s *Badger) Push(_ context.Context, h string, torrent []byte) (ok bool, err error) {
 	err = s.db.Update(func(txn *badger.Txn) error {
 		e := badger.NewEntry([]byte(h), torrent).WithTTL(s.exp)
 		return txn.SetEntry(e)
 	})
-	return
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Badger) Pull(_ context.Context, h string) (torrent []byte, err error) {

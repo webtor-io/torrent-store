@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
@@ -11,18 +12,19 @@ import (
 )
 
 type StoreProvider interface {
-	Push(ctx context.Context, h string, torrent []byte) (err error)
+	Push(ctx context.Context, h string, torrent []byte) (ok bool, err error)
 	Pull(ctx context.Context, h string) (torrent []byte, err error)
-	Touch(ctx context.Context, h string) (err error)
+	Touch(ctx context.Context, h string) (ok bool, err error)
 	Name() string
 }
 
 type Store struct {
-	pullm        *lazymap.LazyMap
-	pushm        *lazymap.LazyMap
-	touchm       *lazymap.LazyMap
+	pullm        *lazymap.LazyMap[[]byte]
+	pushm        *lazymap.LazyMap[bool]
+	touchm       *lazymap.LazyMap[bool]
 	providers    []StoreProvider
 	revProviders []StoreProvider
+	ratem        *lazymap.LazyMap[*atomic.Int64]
 }
 
 var (
@@ -31,12 +33,18 @@ var (
 
 func NewStore(providers []StoreProvider) *Store {
 	cfg := &lazymap.Config{
-		ErrorExpire: 10 * time.Second,
-		Expire:      time.Minute,
+		Expire:      5 * time.Minute,
+		StoreErrors: false,
 	}
-	pullm := lazymap.New(cfg)
-	pushm := lazymap.New(cfg)
-	touchm := lazymap.New(cfg)
+
+	rateCfg := &lazymap.Config{
+		Expire:      1 * time.Minute,
+		StoreErrors: false,
+	}
+	pullm := lazymap.New[[]byte](cfg)
+	pushm := lazymap.New[bool](cfg)
+	touchm := lazymap.New[bool](cfg)
+	ratem := lazymap.New[*atomic.Int64](rateCfg)
 	var revProviders []StoreProvider
 	for _, p := range providers {
 		log.WithField("provider", p.Name()).Info("use provider")
@@ -49,29 +57,54 @@ func NewStore(providers []StoreProvider) *Store {
 		pullm:        &pullm,
 		pushm:        &pushm,
 		touchm:       &touchm,
+		ratem:        &ratem,
 		providers:    providers,
 		revProviders: revProviders,
 	}
 }
 
-func (s *Store) push(ctx context.Context, h string, torrent []byte) (val interface{}, err error) {
+func (s *Store) push(ctx context.Context, h string, torrent []byte) (ok bool, err error) {
 	for _, v := range s.revProviders {
 		t := time.Now()
-		err = v.Push(ctx, h, torrent)
+		ok, err = v.Push(ctx, h, torrent)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider push")
 	}
 	return
 }
 
-func (s *Store) touch(ctx context.Context, h string) (val interface{}, err error) {
-	s.touchm.Touch(h)
+func (s *Store) checkRate(h string) bool {
+	a := s.getRate(h)
+	return a.Load() < 10
+}
 
+func (s *Store) incRate(h string) {
+	a := s.getRate(h)
+	go func() {
+		<-time.After(time.Minute)
+		a.Add(-1)
+	}()
+	a.Add(1)
+}
+
+func (s *Store) getRate(h string) *atomic.Int64 {
+	a, _ := s.ratem.Get(h, func() (*atomic.Int64, error) {
+		return &atomic.Int64{}, nil
+	})
+	return a
+}
+
+func (s *Store) touch(ctx context.Context, h string) (ok bool, err error) {
+	if !s.checkRate(h) {
+		log.WithField("infohash", h).Warn("get rate limit")
+		return false, ErrNotFound
+	}
+	s.touchm.Touch(h)
 	for i, v := range s.providers {
 		t := time.Now()
-		err = v.Touch(ctx, h)
+		ok, err = v.Touch(ctx, h)
 		if errors.Is(err, ErrNotFound) {
 			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider not touched")
 			continue
@@ -81,14 +114,23 @@ func (s *Store) touch(ctx context.Context, h string) (val interface{}, err error
 		}
 		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider touch")
 		if i > 0 {
-			go s.pull(ctx, h, i)
+			go func() {
+				_, _ = s.pull(ctx, h, i)
+			}()
 		}
 		break
+	}
+	if err != nil && errors.Is(err, ErrNotFound) {
+		s.incRate(h)
 	}
 	return
 }
 
 func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, err error) {
+	if !s.checkRate(h) {
+		log.WithField("infohash", h).Warn("get rate limit")
+		return nil, ErrNotFound
+	}
 	for i := start; i < len(s.providers); i++ {
 		t := time.Now()
 		torrent, err = s.providers[i].Pull(ctx, h)
@@ -101,7 +143,7 @@ func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, 
 		if torrent != nil {
 			for j := 0; j < i; j++ {
 				log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).Info("provider push")
-				err = s.providers[j].Push(ctx, h, torrent)
+				_, err = s.providers[j].Push(ctx, h, torrent)
 				if err != nil {
 					log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[j].Name()).WithError(err).Warn("provider not pushed")
 					continue
@@ -110,30 +152,27 @@ func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, 
 		}
 		break
 	}
+	if err != nil && errors.Is(err, ErrNotFound) {
+		s.incRate(h)
+	}
 	return
 }
 
-func (s *Store) Pull(ctx context.Context, h string) (torrent []byte, err error) {
-	v, err := s.pullm.Get(h, func() (interface{}, error) {
+func (s *Store) Pull(ctx context.Context, h string) ([]byte, error) {
+	return s.pullm.Get(h, func() ([]byte, error) {
 		return s.pull(ctx, h, 0)
 	})
-	if err != nil {
-		return nil, err
-	}
-	torrent = v.([]byte)
-	return
+
 }
 
-func (s *Store) Push(ctx context.Context, h string, torrent []byte) (err error) {
-	_, err = s.pushm.Get(h, func() (interface{}, error) {
+func (s *Store) Push(ctx context.Context, h string, torrent []byte) (bool, error) {
+	return s.pushm.Get(h, func() (bool, error) {
 		return s.push(ctx, h, torrent)
 	})
-	return err
 }
 
-func (s *Store) Touch(ctx context.Context, h string) (err error) {
-	_, err = s.touchm.Get(h, func() (interface{}, error) {
+func (s *Store) Touch(ctx context.Context, h string) (bool, error) {
+	return s.touchm.Get(h, func() (bool, error) {
 		return s.touch(ctx, h)
 	})
-	return err
 }

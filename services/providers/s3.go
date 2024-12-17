@@ -54,22 +54,22 @@ func (s *S3) Name() string {
 	return "s3"
 }
 
-func (s *S3) Touch(ctx context.Context, h string) (err error) {
-	//cl := s.cl.Get()
-	//r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
-	//	Bucket: aws.String(s.bucket),
-	//	Key:    aws.String(h),
-	//})
-	//if err != nil {
-	//	if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
-	//		return ss.ErrNotFound
-	//	}
-	//	return err
-	//}
-	//defer func(Body io.ReadCloser) {
-	//	_ = Body.Close()
-	//}(r.Body)
-	return nil
+func (s *S3) Touch(ctx context.Context, h string) (ok bool, err error) {
+	cl := s.cl.Get()
+	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(h),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return false, ss.ErrNotFound
+		}
+		return false, err
+	}
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
+	return true, nil
 }
 
 func (s *S3) makeAWSMD5(b []byte) *string {
@@ -78,7 +78,7 @@ func (s *S3) makeAWSMD5(b []byte) *string {
 	return aws.String(m)
 }
 
-func (s *S3) Push(ctx context.Context, h string, torrent []byte) (err error) {
+func (s *S3) Push(ctx context.Context, h string, torrent []byte) (ok bool, err error) {
 	cl := s.cl.Get()
 	_, err = cl.PutObjectWithContext(ctx,
 		&s3.PutObjectInput{
@@ -87,7 +87,10 @@ func (s *S3) Push(ctx context.Context, h string, torrent []byte) (err error) {
 			Body:       bytes.NewReader(torrent),
 			ContentMD5: s.makeAWSMD5(torrent),
 		})
-	return
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *S3) Pull(ctx context.Context, h string) (torrent []byte, err error) {

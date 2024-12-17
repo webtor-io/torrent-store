@@ -51,23 +51,27 @@ func (s *Redis) Name() string {
 	return "redis"
 }
 
-func (s *Redis) Touch(ctx context.Context, h string) (err error) {
+func (s *Redis) Touch(ctx context.Context, h string) (ok bool, err error) {
 	cl := s.cl.Get()
 
 	res, err := cl.Expire(ctx, h, s.exp).Result()
 
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !res {
-		return ss.ErrNotFound
+		return false, ss.ErrNotFound
 	}
-	return nil
+	return true, nil
 }
 
-func (s *Redis) Push(ctx context.Context, h string, torrent []byte) (err error) {
+func (s *Redis) Push(ctx context.Context, h string, torrent []byte) (ok bool, err error) {
 	cl := s.cl.Get()
-	return cl.Set(ctx, h, torrent, s.exp).Err()
+	err = cl.Set(ctx, h, torrent, s.exp).Err()
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Redis) Pull(ctx context.Context, h string) (torrent []byte, err error) {
