@@ -43,13 +43,21 @@ func serve(c *cli.Context) (err error) {
 		return
 	}
 
+	var servers []cs.Servable
+
 	// Setting Probe
 	probe := cs.NewProbe(c)
-	defer probe.Close()
+	if probe != nil {
+		servers = append(servers, probe)
+		defer probe.Close()
+	}
 
 	// Setting Pprof
 	pprof := cs.NewPprof(c)
-	defer pprof.Close()
+	if pprof != nil {
+		servers = append(servers, pprof)
+		defer pprof.Close()
+	}
 
 	var providers []s.StoreProvider
 
@@ -107,10 +115,11 @@ func serve(c *cli.Context) (err error) {
 
 	// Setting GRPC Server
 	grpcServer := s.NewGRPCServer(c, server)
+	servers = append(servers, grpcServer)
 	defer grpcServer.Close()
 
 	// Setting ServeService
-	serve := cs.NewServe(probe, pprof, grpcServer)
+	serve := cs.NewServe(servers...)
 
 	// And SERVE!
 	err = serve.Serve()
