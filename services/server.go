@@ -113,6 +113,9 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 }
 
 func (s *Server) isAbused(ctx context.Context, h string) (bool, error) {
+	if s.a == nil {
+		return false, nil
+	}
 	return s.a.Get(ctx, h)
 }
 
