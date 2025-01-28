@@ -62,7 +62,11 @@ func (s *Stoplist) getData(b []byte) ([]string, error) {
 	var data []string
 	data = append(data, i.Name)
 	for _, file := range i.Files {
-		data = append(data, strings.Join(file.PathUtf8, " "))
+		path := file.PathUtf8
+		if path == nil {
+			path = file.Path
+		}
+		data = append(data, strings.Join(path, " "))
 	}
 	return data, nil
 }

@@ -1,9 +1,11 @@
 package providers
 
 import (
+	"context"
+	"github.com/pkg/errors"
+	"github.com/redis/go-redis/v9"
 	"time"
 
-	"github.com/go-redis/redis"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
 	ss "github.com/webtor-io/torrent-store/services"
@@ -49,30 +51,36 @@ func (s *Redis) Name() string {
 	return "redis"
 }
 
-func (s *Redis) Touch(h string) (err error) {
+func (s *Redis) Touch(ctx context.Context, h string) (ok bool, err error) {
 	cl := s.cl.Get()
 
-	res, err := cl.Expire(h, s.exp).Result()
+	res, err := cl.Expire(ctx, h, s.exp).Result()
 
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !res {
-		return ss.ErrNotFound
+		return false, ss.ErrNotFound
 	}
-	return nil
+	return true, nil
 }
 
-func (s *Redis) Push(h string, torrent []byte) (err error) {
+func (s *Redis) Push(ctx context.Context, h string, torrent []byte) (ok bool, err error) {
 	cl := s.cl.Get()
-	return cl.Set(h, torrent, s.exp).Err()
+	err = cl.Set(ctx, h, torrent, s.exp).Err()
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
-func (s *Redis) Pull(h string) (torrent []byte, err error) {
+func (s *Redis) Pull(ctx context.Context, h string) (torrent []byte, err error) {
 	cl := s.cl.Get()
-	torrent, err = cl.Get(h).Bytes()
-	if err == redis.Nil {
+	torrent, err = cl.Get(ctx, h).Bytes()
+	if errors.Is(err, redis.Nil) {
 		return nil, ss.ErrNotFound
 	}
 	return
 }
+
+var _ ss.StoreProvider = (*Redis)(nil)
