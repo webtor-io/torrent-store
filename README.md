@@ -5,7 +5,7 @@ Torrent store service with multiple backends and GRPC-access.
 ## Server usage
 
 ```
-$ ./torrent-store help serve
+./torrent-store help serve 
 NAME:
    torrent-store serve - Serves web server
 
@@ -13,8 +13,9 @@ USAGE:
    torrent-store serve [command options] [arguments...]
 
 OPTIONS:
-   --probe-host value                  probe listening host
-   --probe-port value                  probe listening port (default: 8081)
+   --probe-host value                  probe listening host [$PROBE_HOST]
+   --probe-port value                  probe listening port (default: 8081) [$PROBE_PORT]
+   --use-probe                         enable probe [$USE_PROBE]
    --aws-access-key-id value           AWS Access Key ID [$AWS_ACCESS_KEY_ID]
    --aws-secret-access-key value       AWS Secret Access Key [$AWS_SECRET_ACCESS_KEY]
    --aws-endpoint value                AWS Endpoint [$AWS_ENDPOINT]
@@ -23,8 +24,12 @@ OPTIONS:
    --redis-host value                  redis host (default: "localhost") [$REDIS_MASTER_SERVICE_HOST, $ REDIS_SERVICE_HOST]
    --redis-port value                  redis port (default: 6379) [$REDIS_MASTER_SERVICE_PORT, $ REDIS_SERVICE_PORT]
    --redis-pass value                  redis pass [$REDIS_PASS]
+   --redis-user value                  redis user (default: "default") [$REDIS_USER]
    --redis-sentinel-port value         redis sentinel port (default: 0) [$REDIS_SERVICE_PORT_REDIS_SENTINEL]
    --redis-sentinel-master-name value  redis sentinel master name (default: "mymaster") [$REDIS_SERVICE_SENTINEL_MASTER_NAME]
+   --pprof-host value                  pprof listening host [$PPROF_HOST]
+   --pprof-port value                  pprof listening port (default: 8082) [$PPROF_PORT]
+   --use-pprof                         enable pprof [$USE_PPROF]
    --grpc-host value                   grpc listening host [$GRPC_HOST]
    --grpc-port value                   grpc listening port (default: 50051) [$GRPC_PORT]
    --badger-expire value               badger expire (sec) (default: 3600) [$BADGER_EXPIRE]
@@ -35,6 +40,7 @@ OPTIONS:
    --abuse-host value                  abuse store host [$ABUSE_STORE_SERVICE_HOST]
    --abuse-port value                  port of the redis service (default: 50051) [$ABUSE_STORE_SERVICE_PORT]
    --use-abuse                         use abuse [$USE_ABUSE]
+   --stoplist-path value               stoplist path [$STOPLIST_PATH]
 ```
 
 ## Client usage

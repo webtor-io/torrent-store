@@ -70,7 +70,7 @@ func (s *Server) checkStoplist(torrent []byte, log *log.Entry, t time.Time, hash
 	}
 	if cr.Found {
 		log.WithField("duration", time.Since(t)).Warnf("found in stoplist %v", cr.String())
-		return status.Errorf(codes.PermissionDenied, "found in stoplist infoHash=%v", hash)
+		return status.Errorf(codes.PermissionDenied, "found in stoplist infoHash=%v: %s", hash, cr.String())
 	}
 	return nil
 }
