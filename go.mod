@@ -18,7 +18,7 @@ require (
 )
 
 require (
-	github.com/redis/go-redis/v9 v9.7.0
+	github.com/redis/go-redis/v9 v9.7.3
 	github.com/webtor-io/stoplist v0.0.0-20230128160543-ea87bdc34deb
 )
 
