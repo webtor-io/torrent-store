@@ -17,6 +17,7 @@ import (
 const (
 	grpcServerHostFlag = "grpc-host"
 	grpcServerPortFlag = "grpc-port"
+	grpcMaxMsgSize     = 1024 * 1024 * 50
 )
 
 type GRPCServer struct {
@@ -55,7 +56,10 @@ func (s *GRPCServer) Serve() error {
 	}
 	s.ln = ln
 
-	gs := grpc.NewServer()
+	gs := grpc.NewServer(
+		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
+		grpc.MaxSendMsgSize(grpcMaxMsgSize),
+	)
 
 	pb.RegisterTorrentStoreServer(gs, s.s)
 
