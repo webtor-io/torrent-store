@@ -366,6 +366,8 @@ github.com/webtor-io/stoplist v0.0.0-20230128160543-ea87bdc34deb h1:RCjga119RT7h
 github.com/webtor-io/stoplist v0.0.0-20230128160543-ea87bdc34deb/go.mod h1:nlKK64Domln2CfQUQiP2+RcbD0IQPjoBfHDYmiGLuqY=
 github.com/webtor-io/stoplist v0.0.0-20260512171921-64d105948953 h1:JPWkz2ICe3LhWRMKHLbmWJ9GajTO1MmrSs/pP7NMM/s=
 github.com/webtor-io/stoplist v0.0.0-20260512171921-64d105948953/go.mod h1:nlKK64Domln2CfQUQiP2+RcbD0IQPjoBfHDYmiGLuqY=
+github.com/webtor-io/stoplist v0.1.0 h1:QdozBATWFa64wHAcha5DBTX2OqJNVC8tPfZwujq76xA=
+github.com/webtor-io/stoplist v0.1.0/go.mod h1:nlKK64Domln2CfQUQiP2+RcbD0IQPjoBfHDYmiGLuqY=
 github.com/willf/bitset v1.1.9/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 github.com/willf/bitset v1.1.10/go.mod h1:RjeCKbqT1RxIR/KWY6phxZiaY1IyutSBfGjNPySAYV4=
 github.com/xordataexchange/crypt v0.0.3-0.20170626215501-b2862e3d0a77/go.mod h1:aYKd//L2LvnjZzWKhF00oedf4jCCReLcmhLdhm1A27Q=
