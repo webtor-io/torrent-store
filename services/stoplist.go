@@ -90,6 +90,25 @@ func (s *Stoplist) getData(b []byte) ([]string, error) {
 		}
 		data = append(data, strings.Join(path, " "))
 	}
+	// Tracker URLs + comment + creator — CSAM-distribution torrents
+	// often have neutral filenames but advertise the source forum
+	// through announce list or comment ("hash on cpchans.xyz", etc.).
+	// Feed these as additional input so existing stoplist rules
+	// (cpack, brand names, cp+context regex) catch them too.
+	if mi.Announce != "" {
+		data = append(data, mi.Announce)
+	}
+	for _, tier := range mi.AnnounceList {
+		for _, url := range tier {
+			data = append(data, url)
+		}
+	}
+	if mi.Comment != "" {
+		data = append(data, mi.Comment)
+	}
+	if mi.CreatedBy != "" {
+		data = append(data, mi.CreatedBy)
+	}
 	return data, nil
 }
 
