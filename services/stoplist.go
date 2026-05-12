@@ -2,18 +2,40 @@ package services
 
 import (
 	"bytes"
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/pkg/errors"
-	"github.com/urfave/cli"
-	sl "github.com/webtor-io/stoplist"
+	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/anacrolix/torrent/metainfo"
+	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/urfave/cli"
+	sl "github.com/webtor-io/stoplist"
 )
 
 var (
 	re1 = regexp.MustCompile(`[^\p{L}\d]+`)
 	re2 = regexp.MustCompile(`(\d+)`)
 	re3 = regexp.MustCompile(`\s+`)
+
+	// stoplistBlocksTotal counts torrents rejected at intake by the
+	// abuse stoplist, labelled by which main-rule line fired. Pairs
+	// with the helmfile-managed stoplist.yaml — if `main:` rule order
+	// changes there, update mainRuleLabels below.
+	stoplistBlocksTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "torrent_store_stoplist_blocks_total",
+		Help: "Torrents rejected at intake by the abuse stoplist, labelled by which main-rule line fired.",
+	}, []string{"rule"})
+
+	// mainRuleLabels maps the library's "line index N" Stack[0] to a
+	// human-readable Prometheus label. Index order MUST match the
+	// `main:` list in helmfile/values/torrent-store/stoplist.yaml.
+	mainRuleLabels = []string{
+		"stopwords",  // line 0: {stopwords}
+		"age_sexual", // line 1: {age}+{sexual}
+		"age_name",   // line 2: {age}+{name}
+	}
 )
 
 const (
@@ -79,10 +101,29 @@ func (s *Stoplist) Check(b []byte) (*sl.CheckResult, error) {
 	for _, d := range data {
 		cr := s.c.Check(s.normalize(d))
 		if cr.Found {
+			stoplistBlocksTotal.WithLabelValues(ruleLabel(cr)).Inc()
 			return cr, nil
 		}
 	}
 	return &sl.CheckResult{}, nil
+}
+
+// ruleLabel extracts a human-readable Prometheus label from the
+// stoplist library's CheckResult. Stack[0] for a main-rule match is
+// always "line index N" (see github.com/webtor-io/stoplist lineRule
+// implementation); we map N to a friendly label via mainRuleLabels.
+func ruleLabel(cr *sl.CheckResult) string {
+	if cr == nil || !cr.Found || len(cr.Stack) == 0 {
+		return "unknown"
+	}
+	var idx int
+	if _, err := fmt.Sscanf(cr.Stack[0], "line index %d", &idx); err != nil {
+		return "unknown"
+	}
+	if idx < 0 || idx >= len(mainRuleLabels) {
+		return fmt.Sprintf("line_%d", idx)
+	}
+	return mainRuleLabels[idx]
 }
 
 func (s *Stoplist) normalize(str string) string {

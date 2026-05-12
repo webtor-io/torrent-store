@@ -25,6 +25,7 @@ func makeServeCMD() cli.Command {
 
 func configureServe(c *cli.Command) {
 	c.Flags = cs.RegisterProbeFlags(c.Flags)
+	c.Flags = cs.RegisterPromFlags(c.Flags)
 	c.Flags = cs.RegisterS3ClientFlags(c.Flags)
 	c.Flags = cs.RegisterRedisClientFlags(c.Flags)
 	c.Flags = cs.RegisterPprofFlags(c.Flags)
@@ -50,6 +51,13 @@ func serve(c *cli.Context) (err error) {
 	if probe != nil {
 		servers = append(servers, probe)
 		defer probe.Close()
+	}
+
+	// Setting Prom (stoplist hit metrics)
+	prom := cs.NewProm(c)
+	if prom != nil {
+		servers = append(servers, prom)
+		defer prom.Close()
 	}
 
 	// Setting Pprof
