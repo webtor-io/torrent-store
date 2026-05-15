@@ -57,7 +57,8 @@ func RegisterStoplistFlags(f []cli.Flag) []cli.Flag {
 }
 
 type Stoplist struct {
-	c sl.Checker
+	c  sl.Checker
+	pf *prefilter
 }
 
 func NewStoplist(c *cli.Context) (*Stoplist, error) {
@@ -69,8 +70,15 @@ func NewStoplist(c *cli.Context) (*Stoplist, error) {
 	if err != nil {
 		return nil, err
 	}
+	pf, err := newPrefilter(path)
+	if err != nil {
+		// Prefilter failure is non-fatal — the slow path still
+		// works correctly, we just don't get the speedup.
+		pf = nil
+	}
 	return &Stoplist{
-		c: ch,
+		c:  ch,
+		pf: pf,
 	}, nil
 }
 
@@ -145,14 +153,26 @@ func (s *Stoplist) Check(b []byte) (*sl.CheckResult, error) {
 	}
 	if len(data) == 1 {
 		// One-shot: skip the goroutine overhead.
-		cr := s.c.Check(s.normalize(data[0]))
-		if cr.Found {
-			stoplistBlocksTotal.WithLabelValues(ruleLabel(cr)).Inc()
-			return cr, nil
-		}
-		return &sl.CheckResult{}, nil
+		return s.checkOne(data[0]), nil
 	}
 	return s.checkParallel(data), nil
+}
+
+// checkOne runs the cheap prefilter (one combined RE2 regex over all
+// leaf patterns) and only falls through to the expensive sl.Checker
+// on a hit. Shared between the one-shot fast path and the parallel
+// worker.
+func (s *Stoplist) checkOne(d string) *sl.CheckResult {
+	norm := s.normalize(d)
+	if !s.pf.check(norm) {
+		return &sl.CheckResult{}
+	}
+	cr := s.c.Check(norm)
+	if cr.Found {
+		stoplistBlocksTotal.WithLabelValues(ruleLabel(cr)).Inc()
+		return cr
+	}
+	return &sl.CheckResult{}
 }
 
 // checkParallel spawns a worker pool sized to GOMAXPROCS (bounded by
@@ -183,7 +203,11 @@ func (s *Stoplist) checkParallel(data []string) *sl.CheckResult {
 				if done.Load() {
 					return
 				}
-				cr := s.c.Check(s.normalize(d))
+				norm := s.normalize(d)
+				if !s.pf.check(norm) {
+					continue
+				}
+				cr := s.c.Check(norm)
 				if cr.Found {
 					if done.CompareAndSwap(false, true) {
 						result <- cr

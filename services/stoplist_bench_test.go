@@ -27,7 +27,11 @@ func loadBenchStoplist(b *testing.B) *Stoplist {
 	if err != nil {
 		b.Fatalf("load stoplist: %v", err)
 	}
-	return &Stoplist{c: c}
+	pf, err := newPrefilter(yaml)
+	if err != nil {
+		b.Fatalf("load prefilter: %v", err)
+	}
+	return &Stoplist{c: c, pf: pf}
 }
 
 func loadBenchTorrent(b *testing.B) []byte {
