@@ -57,6 +57,18 @@ func TestPrefilterCoverage(t *testing.T) {
 		"redacted",
 		"redacted",
 		"redacted",
+		// 2026-05-18 audit additions
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
+		"redacted",
 	}
 
 	for _, raw := range cases {
