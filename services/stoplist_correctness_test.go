@@ -57,6 +57,18 @@ func TestPrefilterCoverage(t *testing.T) {
 		"cp选",
 		"art of zoo 04 hd mp4",
 		"bestiality videos pack hd 720p",
+		// 2026-05-18 audit additions
+		"kingspass lolita 8 12 yrs 10 yrs",
+		"nastia mouse video",
+		"nastya mouse hd",
+		"valya final version part 03",
+		"valya sister final version part 1",
+		"valya 12 custom",
+		"valya 28",
+		"001 chatroulette omegle chatrandom shagle collection 001 100",
+		"2 4 tb videos chatroulette chatruletka ometv livhub video chat",
+		"mf 16 holland omegle",
+		"young girl has sex with a huge dog",
 	}
 
 	for _, raw := range cases {
