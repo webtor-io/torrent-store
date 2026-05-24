@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
@@ -16,6 +17,23 @@ import (
 	"github.com/urfave/cli"
 	sl "github.com/webtor-io/stoplist"
 )
+
+// maxCommentRunes caps how much of the Comment field is fed into the
+// stoplist. CSAM-distribution Comments are short forum-reference
+// strings ("hash on cpchans.xyz", "tg.me/cp_channel" — typically
+// well under 100 chars); audiobook/ebook torrents pack full
+// multi-thousand-character book descriptions in here. Audit
+// 2026-05-24 — Gabrielle Zevin "Tomorrow and Tomorrow and Tomorrow"
+// audiobook (~2 KB description) was false-blocked by the
+// `{age}+{sexual}` composite (`junior year at harvard` at pos 302
+// + `lovers come together` at pos 92 in narrative prose).
+// Truncating Comment to the first 300 runes keeps every CSAM-Comment
+// pattern observed in production (all under 100 chars) while pushing
+// the second co-occurring age-or-sexual token out of range — long
+// English prose has high probability of containing some age+sexual
+// whole-word pair within the first ~500 chars, but ~300 chars is
+// tight enough to make the composite-FP very rare.
+const maxCommentRunes = 300
 
 var (
 	re1 = regexp.MustCompile(`[^\p{L}\d]+`)
@@ -117,12 +135,24 @@ func (s *Stoplist) getData(b []byte) ([]string, error) {
 	// tracker list was the only signal; all matches fired on
 	// name/paths/comment.
 	if mi.Comment != "" {
-		data = append(data, mi.Comment)
+		data = append(data, truncateRunes(mi.Comment, maxCommentRunes))
 	}
 	if mi.CreatedBy != "" {
 		data = append(data, mi.CreatedBy)
 	}
 	return data, nil
+}
+
+// truncateRunes returns the first `max` runes of s. Used to cap
+// stoplist inputs that would otherwise drag long free-form text
+// (book descriptions in Comment) through every rule and amplify
+// substring-co-occurrence false positives.
+func truncateRunes(s string, max int) string {
+	if utf8.RuneCountInString(s) <= max {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:max])
 }
 
 // Check normalises every data string (name, file paths, tracker URLs,
