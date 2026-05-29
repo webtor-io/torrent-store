@@ -36,6 +36,7 @@ func configureServe(c *cli.Command) {
 	c.Flags = s.RegisterAbuseClientFlags(c.Flags)
 	c.Flags = s.RegisterAbuseFlags(c.Flags)
 	c.Flags = s.RegisterStoplistFlags(c.Flags)
+	c.Flags = s.RegisterServerFlags(c.Flags)
 }
 
 func serve(c *cli.Context) (err error) {
@@ -119,7 +120,7 @@ func serve(c *cli.Context) (err error) {
 	abuse := s.NewAbuse(c, aCl)
 
 	// Setting Server
-	server := s.NewServer(store, abuse, stoplist)
+	server := s.NewServer(store, abuse, stoplist, s.ParseDefaultTrackers(c))
 
 	// Setting GRPC Server
 	grpcServer := s.NewGRPCServer(c, server)

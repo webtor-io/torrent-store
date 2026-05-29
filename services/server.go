@@ -3,28 +3,60 @@ package services
 import (
 	"bytes"
 	"context"
+	"strings"
 	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-type Server struct {
-	pb.UnimplementedTorrentStoreServer
-	s  *Store
-	a  *Abuse
-	sl *Stoplist
+const defaultTrackersFlag = "default-trackers"
+
+// RegisterServerFlags adds the default-trackers flag used by Server to
+// inject extra trackers into pushed torrents (respecting BEP-27 private).
+func RegisterServerFlags(f []cli.Flag) []cli.Flag {
+	return append(f, cli.StringFlag{
+		Name:   defaultTrackersFlag,
+		Usage:  "comma-separated tracker URLs appended to non-private torrents on Push (dedup'd against existing)",
+		Value:  "",
+		EnvVar: "DEFAULT_TRACKERS",
+	})
 }
 
-func NewServer(s *Store, a *Abuse, sl *Stoplist) *Server {
+// ParseDefaultTrackers reads --default-trackers (comma- or whitespace-separated) into a slice.
+func ParseDefaultTrackers(c *cli.Context) []string {
+	raw := c.String(defaultTrackersFlag)
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' }) {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+type Server struct {
+	pb.UnimplementedTorrentStoreServer
+	s               *Store
+	a               *Abuse
+	sl              *Stoplist
+	defaultTrackers []string
+}
+
+func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Server {
 	return &Server{
-		s:  s,
-		a:  a,
-		sl: sl,
+		s:               s,
+		a:               a,
+		sl:              sl,
+		defaultTrackers: defaultTrackers,
 	}
 }
 
@@ -102,13 +134,31 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
 	}
 
-	_, err = s.s.Push(ctx, infoHash, in.GetTorrent())
+	payload := in.GetTorrent()
+	existing, err := s.s.pull(ctx, infoHash, 0)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to read existing for merge; pushing as-is")
+	} else if err == nil {
+		merged, changed, mErr := mergeTorrent(existing, payload, s.defaultTrackers)
+		if mErr != nil {
+			hLog.WithField("duration", time.Since(t)).WithError(mErr).Warn("failed to merge; pushing incoming as-is")
+		} else if !changed {
+			hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent already present, no new announces — skipping push")
+			return &pb.PushReply{InfoHash: infoHash}, nil
+		} else {
+			payload = merged
+			hLog.WithField("merged_len", len(merged)).Info("merged announces from existing torrent")
+		}
+	}
+
+	_, err = s.s.Push(ctx, infoHash, payload)
 	if err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to push")
 		return nil, errors.Wrapf(err, "failed to push torrent infoHash=%v", infoHash)
 	}
+	s.s.pullm.Drop(infoHash)
 
-	hLog.WithField("len", len(in.GetTorrent())).WithField("duration", time.Since(t)).Info("torrent succesfully pushed")
+	hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent succesfully pushed")
 	return &pb.PushReply{InfoHash: infoHash}, nil
 }
 
