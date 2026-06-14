@@ -98,6 +98,31 @@ func (s *Badger) Pull(_ context.Context, h string) (torrent []byte, err error) {
 	return
 }
 
+func (s *Badger) PushManifest(_ context.Context, h string, manifest []byte) (ok bool, err error) {
+	err = s.db.Update(func(txn *badger.Txn) error {
+		e := badger.NewEntry([]byte(manifestKey(h)), manifest).WithTTL(s.exp)
+		return txn.SetEntry(e)
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Badger) PullManifest(_ context.Context, h string) (manifest []byte, err error) {
+	err = s.db.View(func(txn *badger.Txn) (err error) {
+		i, err := txn.Get([]byte(manifestKey(h)))
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return ss.ErrNotFound
+		}
+		return i.Value(func(val []byte) error {
+			manifest = append([]byte{}, val...)
+			return nil
+		})
+	})
+	return
+}
+
 func (s *Badger) Close() {
 	_ = s.db.Close()
 }

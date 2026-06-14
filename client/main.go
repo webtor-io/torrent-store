@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/urfave/cli"
@@ -50,6 +51,20 @@ func pull(c pb.TorrentStoreClient, infoHash string, path string) error {
 		return err
 	}
 	fmt.Println("Pulled")
+	return nil
+}
+
+func files(c pb.TorrentStoreClient, infoHash string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	r, err := c.Files(ctx, &pb.FilesRequest{InfoHash: infoHash})
+	if err != nil {
+		return err
+	}
+	fmt.Printf("name: %s\n", r.GetName())
+	for _, f := range r.GetFiles() {
+		fmt.Printf("%d\t/%s\n", f.GetLength(), strings.Join(f.GetPath(), "/"))
+	}
 	return nil
 }
 
@@ -133,6 +148,22 @@ func main() {
 			Action: func(ctx *cli.Context) error {
 				return withClient(ctx.GlobalString("host"), ctx.GlobalInt("port"), func(c pb.TorrentStoreClient) error {
 					return pull(c, ctx.String("hash"), ctx.String("output"))
+				})
+			},
+		},
+		{
+			Name:    "files",
+			Aliases: []string{"f"},
+			Usage:   "lists the file manifest of a torrent",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "hash, ha",
+					Usage: "info hash of the torrent file",
+				},
+			},
+			Action: func(ctx *cli.Context) error {
+				return withClient(ctx.GlobalString("host"), ctx.GlobalInt("port"), func(c pb.TorrentStoreClient) error {
+					return files(c, ctx.String("hash"))
 				})
 			},
 		},

@@ -111,4 +111,45 @@ func (s *S3) Pull(ctx context.Context, h string) (torrent []byte, err error) {
 	return io.ReadAll(r.Body)
 }
 
+// s3ManifestKey namespaces derived manifests with a .manifest suffix so they
+// sit next to the raw .torrent object (stored under the bare infoHash) without
+// colliding. Manifests are immutable and rebuildable, so they live without an
+// expiry — the durable bottom tier that survives Badger/Redis eviction.
+func s3ManifestKey(h string) string {
+	return h + ".manifest"
+}
+
+func (s *S3) PushManifest(ctx context.Context, h string, manifest []byte) (ok bool, err error) {
+	cl := s.cl.Get()
+	_, err = cl.PutObjectWithContext(ctx,
+		&s3.PutObjectInput{
+			Bucket:     aws.String(s.bucket),
+			Key:        aws.String(s3ManifestKey(h)),
+			Body:       bytes.NewReader(manifest),
+			ContentMD5: s.makeAWSMD5(manifest),
+		})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *S3) PullManifest(ctx context.Context, h string) (manifest []byte, err error) {
+	cl := s.cl.Get()
+	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(s3ManifestKey(h)),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return nil, ss.ErrNotFound
+		}
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
+	return io.ReadAll(r.Body)
+}
+
 var _ ss.StoreProvider = (*S3)(nil)

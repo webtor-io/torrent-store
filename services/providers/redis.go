@@ -83,4 +83,27 @@ func (s *Redis) Pull(ctx context.Context, h string) (torrent []byte, err error) 
 	return
 }
 
+// manifestKey namespaces derived manifests so they never collide with the
+// raw .torrent stored under the bare infoHash.
+func manifestKey(h string) string {
+	return "m:" + h
+}
+
+func (s *Redis) PushManifest(ctx context.Context, h string, manifest []byte) (ok bool, err error) {
+	cl := s.cl.Get()
+	if err = cl.Set(ctx, manifestKey(h), manifest, s.exp).Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Redis) PullManifest(ctx context.Context, h string) (manifest []byte, err error) {
+	cl := s.cl.Get()
+	manifest, err = cl.Get(ctx, manifestKey(h)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, ss.ErrNotFound
+	}
+	return
+}
+
 var _ ss.StoreProvider = (*Redis)(nil)
