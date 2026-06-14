@@ -11,6 +11,12 @@ service TorrentStore {
 
   // Touch torrent in the store
   rpc Touch (TouchRequest) returns (TouchReply) {}
+
+  // Files returns the lightweight file manifest (paths + sizes, no piece
+  // hashes) of a torrent. The manifest is immutable per infoHash and is
+  // cached in the multi-level store, so listing avoids transferring and
+  // parsing the full .torrent on every request.
+  rpc Files (FilesRequest) returns (FilesReply) {}
 }
 
 // The push response message containing info hash of the pushed torrent file
@@ -52,4 +58,25 @@ message TouchReply {
 message TouchRequest {
   string infoHash = 1;
   int32 expire    = 2 [deprecated=true];
+}
+
+// The files request message containing the infoHash
+message FilesRequest {
+  string infoHash = 1;
+}
+
+// A single file entry in a torrent manifest. path is the full path
+// components including the torrent name as the first element (matching
+// the rest-api file path convention). length is the file size in bytes.
+message FileInfo {
+  repeated string path = 1;
+  int64 length         = 2;
+}
+
+// The files response message containing the torrent name and its file
+// manifest. Piece hashes are intentionally omitted — they are not needed
+// for listing and dominate the .torrent size.
+message FilesReply {
+  string name             = 1;
+  repeated FileInfo files = 2;
 }
