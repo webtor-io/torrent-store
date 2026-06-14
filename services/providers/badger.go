@@ -98,29 +98,18 @@ func (s *Badger) Pull(_ context.Context, h string) (torrent []byte, err error) {
 	return
 }
 
-func (s *Badger) PushManifest(_ context.Context, h string, manifest []byte) (ok bool, err error) {
-	err = s.db.Update(func(txn *badger.Txn) error {
-		e := badger.NewEntry([]byte(manifestKey(h)), manifest).WithTTL(s.exp)
-		return txn.SetEntry(e)
-	})
-	if err != nil {
-		return false, err
-	}
+// Badger intentionally opts out of manifest caching. The extra read/write
+// volume from manifests on top of the torrent workload tripped a nil-pointer
+// race inside Badger v3's memtable handling under load (a torrent-store pod
+// crashed on 2026-06-14). Manifests are confined to the Redis (fast, shared)
+// and S3 (durable) tiers instead, and rest-api fronts them with its own
+// in-process cache, so dropping the local Badger L1 is barely noticeable.
+func (s *Badger) PushManifest(_ context.Context, _ string, _ []byte) (ok bool, err error) {
 	return true, nil
 }
 
-func (s *Badger) PullManifest(_ context.Context, h string) (manifest []byte, err error) {
-	err = s.db.View(func(txn *badger.Txn) (err error) {
-		i, err := txn.Get([]byte(manifestKey(h)))
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return ss.ErrNotFound
-		}
-		return i.Value(func(val []byte) error {
-			manifest = append([]byte{}, val...)
-			return nil
-		})
-	})
-	return
+func (s *Badger) PullManifest(_ context.Context, _ string) (manifest []byte, err error) {
+	return nil, ss.ErrNotFound
 }
 
 func (s *Badger) Close() {
