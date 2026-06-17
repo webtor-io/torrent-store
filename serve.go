@@ -71,7 +71,10 @@ func serve(c *cli.Context) (err error) {
 	var providers []s.StoreProvider
 
 	// Setting Badger Provider
-	badger := p.NewBadger(c)
+	badger, err := p.NewBadger(c)
+	if err != nil {
+		return
+	}
 	defer badger.Close()
 	providers = append(providers, badger)
 

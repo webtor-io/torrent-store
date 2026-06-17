@@ -30,9 +30,12 @@ type Badger struct {
 	db  *badger.DB
 }
 
-func NewBadger(c *cli.Context) *Badger {
+func NewBadger(c *cli.Context) (*Badger, error) {
 	opt := badger.DefaultOptions("/tmp/badger")
-	db, _ := badger.Open(opt)
+	db, err := badger.Open(opt)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to open badger db")
+	}
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
@@ -45,7 +48,7 @@ func NewBadger(c *cli.Context) *Badger {
 	return &Badger{
 		exp: time.Duration(c.Int(BadgerExpireFlag)) * time.Second,
 		db:  db,
-	}
+	}, nil
 }
 
 func (s *Badger) Name() string {
@@ -57,13 +60,15 @@ func (s *Badger) Touch(_ context.Context, h string) (ok bool, err error) {
 		i, err := txn.Get([]byte(h))
 		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ss.ErrNotFound
-		} else {
-			err = i.Value(func(val []byte) error {
-				e := badger.NewEntry([]byte(h), val).WithTTL(s.exp)
-				return txn.SetEntry(e)
-			})
+		}
+		// Any other Get error leaves `i` nil — must not dereference it.
+		if err != nil {
 			return err
 		}
+		return i.Value(func(val []byte) error {
+			e := badger.NewEntry([]byte(h), val).WithTTL(s.exp)
+			return txn.SetEntry(e)
+		})
 	})
 	if err != nil {
 		return false, err
@@ -87,13 +92,15 @@ func (s *Badger) Pull(_ context.Context, h string) (torrent []byte, err error) {
 		i, err := txn.Get([]byte(h))
 		if errors.Is(err, badger.ErrKeyNotFound) {
 			return ss.ErrNotFound
-		} else {
-			err = i.Value(func(val []byte) error {
-				torrent = val
-				return nil
-			})
-			return
 		}
+		// Any other Get error leaves `i` nil — must not dereference it.
+		if err != nil {
+			return err
+		}
+		return i.Value(func(val []byte) error {
+			torrent = val
+			return nil
+		})
 	})
 	return
 }
