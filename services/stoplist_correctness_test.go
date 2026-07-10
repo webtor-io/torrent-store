@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bufio"
 	"os"
 	"regexp"
 	"strings"
@@ -23,14 +24,33 @@ func benchNormalize(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// TestPrefilterCoverage runs every TP fixture from stoplist_eval
-// through prefilter and verifies it returns true. A prefilter miss
-// here would mean a CSAM input is silently allowed through Pull/Push
-// once the gate is wired up — a correctness regression.
+// TestPrefilterCoverage verifies the prefilter is a superset of the
+// checker: every must-block case that fires in the full rule tree must
+// also survive the fast prefilter, otherwise a CSAM input is silently
+// allowed through Pull/Push once the gate is wired up.
+//
+// The must-block cases are real CSAM titles / evasion patterns — a map
+// of what the filter catches, which is exactly what an attacker wants
+// and must not live in this PUBLIC repo. They are loaded from an
+// out-of-band corpus file instead (STOPLIST_CORPUS_BLOCK); the test
+// skips when it (or STOPLIST_BENCH_YAML) is absent. The canonical
+// corpus + a standalone runner live in the private infra/helmfile repo
+// under values/torrent-store/stoplist-tests/ (see its README).
 func TestPrefilterCoverage(t *testing.T) {
 	yamlPath := os.Getenv("STOPLIST_BENCH_YAML")
 	if yamlPath == "" {
 		t.Skip("STOPLIST_BENCH_YAML not set")
+	}
+	corpusPath := os.Getenv("STOPLIST_CORPUS_BLOCK")
+	if corpusPath == "" {
+		t.Skip("STOPLIST_CORPUS_BLOCK not set (private must-block corpus)")
+	}
+	cases, err := readCorpus(corpusPath)
+	if err != nil {
+		t.Fatalf("corpus %q: %v", corpusPath, err)
+	}
+	if len(cases) == 0 {
+		t.Fatalf("corpus %q is empty", corpusPath)
 	}
 	pf, err := newPrefilter(yamlPath)
 	if err != nil {
@@ -39,36 +59,6 @@ func TestPrefilterCoverage(t *testing.T) {
 	checker, err := sl.NewRuleFromYamlFile(yamlPath)
 	if err != nil {
 		t.Fatalf("checker: %v", err)
-	}
-
-	cases := []string{
-		// CSAM TPs — must be caught
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		// 2026-05-14 audit additions
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		// 2026-05-18 audit additions
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
-		"redacted",
 	}
 
 	for _, raw := range cases {
@@ -84,4 +74,26 @@ func TestPrefilterCoverage(t *testing.T) {
 			t.Errorf("[PREFILTER MISS] %q -> %q would be silently allowed!", raw, norm)
 		}
 	}
+}
+
+// readCorpus reads one raw case per line from the out-of-band corpus
+// file, skipping blank lines and `#` comments. The file is never part
+// of this repo — see TestPrefilterCoverage.
+func readCorpus(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out, sc.Err()
 }
