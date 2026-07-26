@@ -1,6 +1,6 @@
 module github.com/webtor-io/torrent-store
 
-go 1.24.5
+go 1.25.0
 
 require (
 	github.com/anacrolix/torrent v1.58.1
@@ -12,14 +12,17 @@ require (
 	github.com/webtor-io/abuse-store v0.0.0-20241006125525-8e0ef7615aec
 	github.com/webtor-io/common-services v0.0.0-20250112153432-554128b56bd5
 	github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108
-	golang.org/x/sys v0.34.0 // indirect
-	google.golang.org/grpc v1.74.2
-	google.golang.org/protobuf v1.36.6
+	golang.org/x/sys v0.45.0 // indirect
+	google.golang.org/grpc v1.82.1
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
+	github.com/prometheus/client_golang v1.22.0
 	github.com/redis/go-redis/v9 v9.11.0
+	github.com/wasilibs/go-re2 v1.10.0
 	github.com/webtor-io/stoplist v0.1.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -54,7 +57,6 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/onsi/ginkgo v1.16.5 // indirect
 	github.com/onsi/gomega v1.17.0 // indirect
-	github.com/prometheus/client_golang v1.22.0 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.65.0 // indirect
 	github.com/prometheus/procfs v0.17.0 // indirect
@@ -66,15 +68,13 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
 	github.com/vmihailenco/tagparser v0.1.2 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
-	github.com/wasilibs/go-re2 v1.10.0 // indirect
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
 	go.opencensus.io v0.24.0 // indirect
-	golang.org/x/crypto v0.40.0 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792 // indirect
-	golang.org/x/net v0.42.0 // indirect
-	golang.org/x/text v0.27.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250728155136-f173205681a0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
 )
