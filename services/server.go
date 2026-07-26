@@ -88,8 +88,32 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	if err != nil {
 		return nil, err
 	}
+	// Guards consumers against malformed torrents stored before geometry
+	// validation existed on Push.
+	err = s.checkGeometry(torrent, hLog, t, in.GetInfoHash())
+	if err != nil {
+		return nil, err
+	}
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
 	return &pb.PullReply{Torrent: []byte(torrent)}, nil
+}
+
+func (s *Server) checkGeometry(torrent []byte, log *log.Entry, t time.Time, hash string) error {
+	mi, err := metainfo.Load(bytes.NewReader(torrent))
+	if err != nil {
+		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to parse stored torrent")
+		return errors.Wrapf(err, "failed to parse stored torrent infoHash=%v", hash)
+	}
+	info, err := mi.UnmarshalInfo()
+	if err != nil {
+		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal stored info")
+		return errors.Wrapf(err, "failed to unmarshal stored info infoHash=%v", hash)
+	}
+	if err := ValidateInfoGeometry(&info); err != nil {
+		log.WithField("duration", time.Since(t)).WithError(err).Warn("malformed torrent")
+		return status.Errorf(codes.FailedPrecondition, "malformed torrent infoHash=%v: %v", hash, err)
+	}
+	return nil
 }
 
 func (s *Server) checkStoplist(torrent []byte, log *log.Entry, t time.Time, hash string) error {
@@ -133,6 +157,16 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	if abused {
 		hLog.WithField("duration", time.Since(t)).Warn("abused")
 		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
+	}
+
+	info, err := mi.UnmarshalInfo()
+	if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal info")
+		return nil, status.Errorf(codes.InvalidArgument, "failed to unmarshal info infoHash=%v: %v", infoHash, err)
+	}
+	if err := ValidateInfoGeometry(&info); err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("malformed torrent rejected")
+		return nil, status.Errorf(codes.InvalidArgument, "malformed torrent infoHash=%v: %v", infoHash, err)
 	}
 
 	payload := in.GetTorrent()
