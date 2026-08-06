@@ -17,6 +17,13 @@ service TorrentStore {
   // cached in the multi-level store, so listing avoids transferring and
   // parsing the full .torrent on every request.
   rpc Files (FilesRequest) returns (FilesReply) {}
+
+  // Fingerprint returns content fingerprints identifying a torrent's payload
+  // independently of its infoHash: re-wrapping the same bytes under a new
+  // name changes the infoHash but not the fingerprint. Derived from the
+  // stored .torrent and cached like the manifest, so callers get a few bytes
+  // instead of pulling and parsing the whole thing.
+  rpc Fingerprint (FingerprintRequest) returns (FingerprintReply) {}
 }
 
 // The push response message containing info hash of the pushed torrent file
@@ -79,4 +86,24 @@ message FileInfo {
 message FilesReply {
   string name             = 1;
   repeated FileInfo files = 2;
+}
+
+// The fingerprint request message containing the infoHash
+message FingerprintRequest {
+  string infoHash = 1;
+}
+
+// One content fingerprint. kind names the scheme ("v1layout" covers the piece
+// geometry and table, "v2file" a BEP 52 per-file merkle root), value is the
+// hex digest, length the number of payload bytes it covers. Match on
+// kind+value; length is for diagnostics.
+message FingerprintInfo {
+  string kind  = 1;
+  string value = 2;
+  int64 length = 3;
+}
+
+// The fingerprint response message
+message FingerprintReply {
+  repeated FingerprintInfo fingerprints = 1;
 }

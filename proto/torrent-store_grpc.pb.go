@@ -19,10 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TorrentStore_Push_FullMethodName  = "/TorrentStore/Push"
-	TorrentStore_Pull_FullMethodName  = "/TorrentStore/Pull"
-	TorrentStore_Touch_FullMethodName = "/TorrentStore/Touch"
-	TorrentStore_Files_FullMethodName = "/TorrentStore/Files"
+	TorrentStore_Push_FullMethodName        = "/TorrentStore/Push"
+	TorrentStore_Pull_FullMethodName        = "/TorrentStore/Pull"
+	TorrentStore_Touch_FullMethodName       = "/TorrentStore/Touch"
+	TorrentStore_Files_FullMethodName       = "/TorrentStore/Files"
+	TorrentStore_Fingerprint_FullMethodName = "/TorrentStore/Fingerprint"
 )
 
 // TorrentStoreClient is the client API for TorrentStore service.
@@ -40,6 +41,12 @@ type TorrentStoreClient interface {
 	// cached in the multi-level store, so listing avoids transferring and
 	// parsing the full .torrent on every request.
 	Files(ctx context.Context, in *FilesRequest, opts ...grpc.CallOption) (*FilesReply, error)
+	// Fingerprint returns content fingerprints identifying a torrent's payload
+	// independently of its infoHash: re-wrapping the same bytes under a new
+	// name changes the infoHash but not the fingerprint. Derived from the
+	// stored .torrent and cached like the manifest, so callers get a few bytes
+	// instead of pulling and parsing the whole thing.
+	Fingerprint(ctx context.Context, in *FingerprintRequest, opts ...grpc.CallOption) (*FingerprintReply, error)
 }
 
 type torrentStoreClient struct {
@@ -90,6 +97,16 @@ func (c *torrentStoreClient) Files(ctx context.Context, in *FilesRequest, opts .
 	return out, nil
 }
 
+func (c *torrentStoreClient) Fingerprint(ctx context.Context, in *FingerprintRequest, opts ...grpc.CallOption) (*FingerprintReply, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FingerprintReply)
+	err := c.cc.Invoke(ctx, TorrentStore_Fingerprint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TorrentStoreServer is the server API for TorrentStore service.
 // All implementations must embed UnimplementedTorrentStoreServer
 // for forward compatibility.
@@ -105,6 +122,12 @@ type TorrentStoreServer interface {
 	// cached in the multi-level store, so listing avoids transferring and
 	// parsing the full .torrent on every request.
 	Files(context.Context, *FilesRequest) (*FilesReply, error)
+	// Fingerprint returns content fingerprints identifying a torrent's payload
+	// independently of its infoHash: re-wrapping the same bytes under a new
+	// name changes the infoHash but not the fingerprint. Derived from the
+	// stored .torrent and cached like the manifest, so callers get a few bytes
+	// instead of pulling and parsing the whole thing.
+	Fingerprint(context.Context, *FingerprintRequest) (*FingerprintReply, error)
 	mustEmbedUnimplementedTorrentStoreServer()
 }
 
@@ -126,6 +149,9 @@ func (UnimplementedTorrentStoreServer) Touch(context.Context, *TouchRequest) (*T
 }
 func (UnimplementedTorrentStoreServer) Files(context.Context, *FilesRequest) (*FilesReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Files not implemented")
+}
+func (UnimplementedTorrentStoreServer) Fingerprint(context.Context, *FingerprintRequest) (*FingerprintReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Fingerprint not implemented")
 }
 func (UnimplementedTorrentStoreServer) mustEmbedUnimplementedTorrentStoreServer() {}
 func (UnimplementedTorrentStoreServer) testEmbeddedByValue()                      {}
@@ -220,6 +246,24 @@ func _TorrentStore_Files_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TorrentStore_Fingerprint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FingerprintRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TorrentStoreServer).Fingerprint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TorrentStore_Fingerprint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TorrentStoreServer).Fingerprint(ctx, req.(*FingerprintRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TorrentStore_ServiceDesc is the grpc.ServiceDesc for TorrentStore service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -242,6 +286,10 @@ var TorrentStore_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Files",
 			Handler:    _TorrentStore_Files_Handler,
+		},
+		{
+			MethodName: "Fingerprint",
+			Handler:    _TorrentStore_Fingerprint_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

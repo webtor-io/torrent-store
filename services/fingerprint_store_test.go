@@ -1,11 +1,15 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
 
 	"github.com/anacrolix/torrent/metainfo"
+	pb "github.com/webtor-io/torrent-store/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestBuildAndParseFingerprintRoundTrip(t *testing.T) {
@@ -120,5 +124,54 @@ func TestStoreFingerprintBackfillsUpperTier(t *testing.T) {
 	}
 	if string(fast.fingerprints[h]) != string(payload) {
 		t.Fatal("upper tier was not backfilled")
+	}
+}
+
+// The RPC path: derive once, serve from cache after, and keep returning the
+// same values. Mirrors the Files handler, so the same guarantees apply.
+func TestServerFingerprintServesAndCaches(t *testing.T) {
+	p := newFakeProvider("mem", true)
+	raw := makeRawTorrent(t, validInfo())
+	mi, err := metainfo.Load(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	h := mi.HashInfoBytes().HexString()
+	p.torrents[h] = raw
+
+	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, nil)
+	first, err := srv.Fingerprint(context.Background(), &pb.FingerprintRequest{InfoHash: h})
+	if err != nil {
+		t.Fatalf("fingerprint: %v", err)
+	}
+	if len(first.GetFingerprints()) == 0 {
+		t.Fatal("no fingerprints returned")
+	}
+	fp := first.GetFingerprints()[0]
+	if fp.GetKind() != "v1layout" || fp.GetValue() == "" || fp.GetLength() == 0 {
+		t.Fatalf("malformed fingerprint in reply: %+v", fp)
+	}
+	if len(p.fingerprints[h]) == 0 {
+		t.Fatal("derived fingerprint was not cached")
+	}
+
+	// A second call must not need the torrent at all: drop it and check the
+	// reply still comes back identical, proving it is served from the cache.
+	delete(p.torrents, h)
+	second, err := srv.Fingerprint(context.Background(), &pb.FingerprintRequest{InfoHash: h})
+	if err != nil {
+		t.Fatalf("second fingerprint: %v", err)
+	}
+	if len(second.GetFingerprints()) != len(first.GetFingerprints()) ||
+		second.GetFingerprints()[0].GetValue() != fp.GetValue() {
+		t.Fatalf("cached reply differs: %+v vs %+v", second.GetFingerprints(), first.GetFingerprints())
+	}
+}
+
+func TestServerFingerprintUnknownHash(t *testing.T) {
+	srv := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, nil, nil)
+	_, err := srv.Fingerprint(context.Background(), &pb.FingerprintRequest{InfoHash: "nosuchhash"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("code = %v (err %v), want NotFound", status.Code(err), err)
 	}
 }

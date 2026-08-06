@@ -248,6 +248,55 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	return reply, nil
 }
 
+// Fingerprint mirrors Files: abuse is the hard gate checked on every call
+// including cache hits, the stoplist is enforced at build time when the
+// torrent bytes are in hand, and the derived value is cached across tiers.
+func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*pb.FingerprintReply, error) {
+	t := time.Now()
+	infoHash := in.GetInfoHash()
+	hLog := log.WithField("infoHash", infoHash).WithField("method", "fingerprint")
+	hLog.Info("fingerprint request")
+
+	abused, err := s.isAbused(ctx, infoHash)
+	if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to check abuse")
+		return nil, errors.Wrapf(err, "failed to check abuse infoHash=%v", infoHash)
+	}
+	if abused {
+		hLog.WithField("duration", time.Since(t)).Warn("abused")
+		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
+	}
+
+	blob, err := s.s.Fingerprint(ctx, infoHash, func(torrent []byte) ([]byte, error) {
+		if serr := s.checkStoplist(torrent, hLog, t, infoHash); serr != nil {
+			return nil, serr
+		}
+		return buildFingerprint(torrent)
+	})
+	if errors.Is(err, ErrNotFound) {
+		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
+		return nil, status.Errorf(codes.NotFound, "unable to find torrent for infoHash=%v", infoHash)
+	} else if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
+		// Preserve the gRPC status set during build (e.g. stoplist
+		// PermissionDenied) instead of flattening it into Internal.
+		return nil, err
+	} else if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to get fingerprint")
+		return nil, errors.Wrapf(err, "failed to get fingerprint infoHash=%v", infoHash)
+	}
+
+	reply := &pb.FingerprintReply{}
+	for _, f := range parseFingerprint(blob) {
+		reply.Fingerprints = append(reply.Fingerprints, &pb.FingerprintInfo{
+			Kind:   f.Kind,
+			Value:  f.Value,
+			Length: f.Length,
+		})
+	}
+	hLog.WithField("fingerprints", len(reply.GetFingerprints())).WithField("duration", time.Since(t)).Info("sending fingerprint response")
+	return reply, nil
+}
+
 func (s *Server) isAbused(ctx context.Context, h string) (bool, error) {
 	if s.a == nil {
 		return false, nil
