@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"sort"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
@@ -20,7 +19,7 @@ import (
 // collapses the whole set to a single decision — block one copy, and every
 // other copy of the same bytes is known too, including ones uploaded later.
 //
-// Two kinds are emitted, and they differ in how much they can promise:
+// One kind is emitted today:
 //
 //   - FingerprintLayout (v1): SHA-256 over the piece geometry and the full
 //     piece-hash table. Piece hashes are computed over the CONCATENATION of
@@ -32,25 +31,28 @@ import (
 //     single-file torrent there is nothing to shift, so the layout
 //     fingerprint is a true content identity for that file.
 //
-//   - FingerprintFile (v2, BEP 52): the per-file merkle root taken straight
-//     from the file tree. This is a real position-independent identity for one
-//     file's bytes and survives repacking, but only v2 (or hybrid) torrents
-//     carry it.
+// Kind is carried in the wire format and in storage even though there is only
+// one value, so adding a scheme later is not a breaking change.
 //
 // Deliberately NOT attempted: per-file fingerprints for v1 by hashing the
 // pieces that fall inside a file's byte range. Those pieces are only stable
 // while the file's offset is stable, so the result would look like a per-file
 // identity while silently behaving like a layout one.
-const (
-	FingerprintLayout = "v1layout"
-	FingerprintFile   = "v2file"
-)
-
-// minFingerprintFileLength skips files too small to be worth identifying.
-// Small files travel with unrelated payloads — a README, a tracker blurb, a
-// cover image — and fingerprinting them would link torrents that share nothing
-// that matters.
-const minFingerprintFileLength = 1 << 20 // 1 MiB
+//
+// BEP 52 per-file merkle roots were implemented and then removed. They are a
+// genuine position-independent identity, but v2 torrents were 1 in 60 of a
+// live sample, so the branch carried ~2% of the value while producing 100% of
+// this package's defects — a panic and a non-determinism, both only reachable
+// through it. Two things for whoever adds it back:
+//   - metainfo's PiecesRootAsByteArray PANICS when a root is present but not
+//     exactly 32 bytes, and torrents come from callers. Check the length first.
+//   - FileTree.Walk descends a map, so its output order is randomised and must
+//     be sorted before it reaches storage.
+//
+// It also matches at FILE granularity rather than whole-torrent, so a ban
+// propagating through it reaches every torrent containing that file — a wider
+// blast radius than v1layout, and worth deciding on deliberately.
+const FingerprintLayout = "v1layout"
 
 // Fingerprint is one content identity derived from a torrent.
 type Fingerprint struct {
@@ -69,10 +71,7 @@ func (f Fingerprint) String() string { return f.Kind + ":" + f.Value }
 
 // Compute derives every content identity available from a .torrent.
 //
-// A torrent always yields at least the layout fingerprint. v2 torrents
-// additionally yield one file fingerprint per file over the size threshold.
-// The result is deterministic: layout first, then file fingerprints sorted by
-// digest — the file tree itself walks in randomised order.
+// Every torrent with a v1 piece table yields exactly one layout fingerprint.
 func Compute(torrent []byte) ([]Fingerprint, error) {
 	mi, err := metainfo.Load(bytes.NewReader(torrent))
 	if err != nil {
@@ -106,33 +105,6 @@ func fingerprintsFromInfo(info *metainfo.Info) ([]Fingerprint, error) {
 			Value:  hex.EncodeToString(h.Sum(nil)),
 			Length: total,
 		})
-	}
-
-	if info.HasV2() {
-		var v2 []Fingerprint
-		info.FileTree.Walk(nil, func(_ []string, ft *metainfo.FileTree) {
-			// Do NOT call ft.PiecesRootAsByteArray() without this length
-			// check: it panics when the root is present but not exactly 32
-			// bytes, and these torrents arrive from callers. Nothing else in
-			// the service reads the v2 file tree, so this is the only guard.
-			if len(ft.File.PiecesRoot) != sha256.Size || ft.File.Length < minFingerprintFileLength {
-				return
-			}
-			h := sha256.New()
-			h.Write([]byte(FingerprintFile))
-			_ = binary.Write(h, binary.BigEndian, ft.File.Length)
-			h.Write([]byte(ft.File.PiecesRoot))
-			v2 = append(v2, Fingerprint{
-				Kind:   FingerprintFile,
-				Value:  hex.EncodeToString(h.Sum(nil)),
-				Length: ft.File.Length,
-			})
-		})
-		// FileTree.Walk descends through a map, so it yields files in
-		// randomised order. Sort so the derived blob is byte-stable and two
-		// pods deriving the same torrent cannot disagree.
-		sort.Slice(v2, func(i, j int) bool { return v2[i].Value < v2[j].Value })
-		res = append(res, v2...)
 	}
 
 	if len(res) == 0 {
