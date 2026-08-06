@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/urfave/cli"
+	"github.com/webtor-io/torrent-store/fingerprint"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc"
 )
@@ -51,6 +52,26 @@ func pull(c pb.TorrentStoreClient, infoHash string, path string) error {
 		return err
 	}
 	fmt.Println("Pulled")
+	return nil
+}
+
+// fingerprint pulls a torrent and prints its content fingerprints. Useful for
+// spotting one payload republished under many torrent names: the infohashes
+// all differ, the fingerprint does not.
+func printFingerprints(c pb.TorrentStoreClient, infoHash string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	r, err := c.Pull(ctx, &pb.PullRequest{InfoHash: infoHash})
+	if err != nil {
+		return err
+	}
+	fps, err := fingerprint.Compute(r.Torrent)
+	if err != nil {
+		return err
+	}
+	for _, f := range fps {
+		fmt.Printf("%s\t%d\n", f.String(), f.Length)
+	}
 	return nil
 }
 
@@ -148,6 +169,22 @@ func main() {
 			Action: func(ctx *cli.Context) error {
 				return withClient(ctx.GlobalString("host"), ctx.GlobalInt("port"), func(c pb.TorrentStoreClient) error {
 					return pull(c, ctx.String("hash"), ctx.String("output"))
+				})
+			},
+		},
+		{
+			Name:    "fingerprint",
+			Aliases: []string{"fp"},
+			Usage:   "prints content fingerprints of a torrent (same payload => same fingerprint, whatever the name)",
+			Flags: []cli.Flag{
+				cli.StringFlag{
+					Name:  "hash, ha",
+					Usage: "info hash of the torrent file",
+				},
+			},
+			Action: func(ctx *cli.Context) error {
+				return withClient(ctx.GlobalString("host"), ctx.GlobalInt("port"), func(c pb.TorrentStoreClient) error {
+					return printFingerprints(c, ctx.String("hash"))
 				})
 			},
 		},
