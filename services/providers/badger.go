@@ -119,6 +119,18 @@ func (s *Badger) PullManifest(_ context.Context, _ string) (manifest []byte, err
 	return nil, ss.ErrNotFound
 }
 
+// Badger opts out of fingerprint caching for the same reason it opts out of
+// manifests: extra read/write volume on top of the torrent workload is what
+// tripped the Badger v3 memtable race. Fingerprints live in the Redis and S3
+// tiers instead.
+func (s *Badger) PushFingerprint(_ context.Context, _ string, _ []byte) (ok bool, err error) {
+	return true, nil
+}
+
+func (s *Badger) PullFingerprint(_ context.Context, _ string) (fp []byte, err error) {
+	return nil, ss.ErrNotFound
+}
+
 func (s *Badger) Close() {
 	_ = s.db.Close()
 }

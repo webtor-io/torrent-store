@@ -20,6 +20,11 @@ type StoreProvider interface {
 	PushManifest(ctx context.Context, h string, manifest []byte) (ok bool, err error)
 	// PullManifest returns a previously cached file manifest, or ErrNotFound.
 	PullManifest(ctx context.Context, h string) (manifest []byte, err error)
+	// PushFingerprint stores the derived content fingerprints of a torrent.
+	// A provider may no-op if it opts out, exactly as for manifests.
+	PushFingerprint(ctx context.Context, h string, fp []byte) (ok bool, err error)
+	// PullFingerprint returns previously cached fingerprints, or ErrNotFound.
+	PullFingerprint(ctx context.Context, h string) (fp []byte, err error)
 	Name() string
 }
 
@@ -28,6 +33,7 @@ type Store struct {
 	pushm        *lazymap.LazyMap[bool]
 	touchm       *lazymap.LazyMap[bool]
 	manifestm    *lazymap.LazyMap[[]byte]
+	fingerprintm *lazymap.LazyMap[[]byte]
 	providers    []StoreProvider
 	revProviders []StoreProvider
 	ratem        *lazymap.LazyMap[*atomic.Int64]
@@ -51,6 +57,7 @@ func NewStore(providers []StoreProvider) *Store {
 	pushm := lazymap.New[bool](cfg)
 	touchm := lazymap.New[bool](cfg)
 	manifestm := lazymap.New[[]byte](cfg)
+	fingerprintm := lazymap.New[[]byte](cfg)
 	ratem := lazymap.New[*atomic.Int64](rateCfg)
 	var revProviders []StoreProvider
 	for _, p := range providers {
@@ -65,6 +72,7 @@ func NewStore(providers []StoreProvider) *Store {
 		pushm:        &pushm,
 		touchm:       &touchm,
 		manifestm:    &manifestm,
+		fingerprintm: &fingerprintm,
 		ratem:        &ratem,
 		providers:    providers,
 		revProviders: revProviders,
@@ -254,5 +262,74 @@ func (s *Store) Manifest(ctx context.Context, h string, build func(torrent []byt
 		}
 		s.pushManifest(ctx, h, manifest)
 		return manifest, nil
+	})
+}
+
+// pullFingerprint walks providers from `start`, returning the first cached
+// fingerprint blob and backfilling the faster upper tiers on a hit. Mirrors
+// pullManifest.
+func (s *Store) pullFingerprint(ctx context.Context, h string, start int) (fp []byte, err error) {
+	for i := start; i < len(s.providers); i++ {
+		t := time.Now()
+		fp, err = s.providers[i].PullFingerprint(ctx, h)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		} else if err != nil {
+			return
+		}
+		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[i].Name()).Info("provider pull fingerprint")
+		if fp != nil {
+			for j := 0; j < i; j++ {
+				if _, perr := s.providers[j].PushFingerprint(ctx, h, fp); perr != nil {
+					log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).WithError(perr).Warn("fingerprint not backfilled")
+				}
+			}
+		}
+		return
+	}
+	return nil, ErrNotFound
+}
+
+// pushFingerprint writes a fingerprint blob to every provider. Failures are
+// non-fatal: like a manifest it is rebuildable from the stored .torrent, so a
+// partial write only costs a future miss on that tier.
+func (s *Store) pushFingerprint(ctx context.Context, h string, fp []byte) {
+	for _, v := range s.revProviders {
+		t := time.Now()
+		if _, err := v.PushFingerprint(ctx, h, fp); err != nil {
+			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).WithError(err).Warn("provider not pushed fingerprint")
+			continue
+		}
+		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider push fingerprint")
+	}
+}
+
+// Fingerprint returns the cached content fingerprints for h, deriving them via
+// build() from the stored .torrent on a miss and persisting them across tiers.
+// Singleflighted per infoHash, and immutable per infoHash like a manifest, so
+// no invalidation is needed.
+//
+// Worth caching even though the value is tiny: deriving it needs the whole
+// .torrent, whose piece table dominates its size, so a cache hit avoids both
+// pulling those bytes and parsing them.
+func (s *Store) Fingerprint(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
+	return s.fingerprintm.Get(h, func() ([]byte, error) {
+		fp, err := s.pullFingerprint(ctx, h, 0)
+		if err == nil {
+			return fp, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return nil, err
+		}
+		torrent, err := s.Pull(ctx, h)
+		if err != nil {
+			return nil, err
+		}
+		fp, err = build(torrent)
+		if err != nil {
+			return nil, err
+		}
+		s.pushFingerprint(ctx, h, fp)
+		return fp, nil
 	})
 }

@@ -75,6 +75,9 @@ type fakeProvider struct {
 	manifests     map[string][]byte
 	pullManiCalls int
 	pushManiCalls int
+	fingerprints  map[string][]byte
+	pullFpCalls   int
+	pushFpCalls   int
 }
 
 func newFakeProvider(name string, supportsMani bool) *fakeProvider {
@@ -83,6 +86,7 @@ func newFakeProvider(name string, supportsMani bool) *fakeProvider {
 		supportsMani: supportsMani,
 		torrents:     map[string][]byte{},
 		manifests:    map[string][]byte{},
+		fingerprints: map[string][]byte{},
 	}
 }
 
@@ -123,6 +127,33 @@ func (f *fakeProvider) PushManifest(_ context.Context, h string, manifest []byte
 	}
 	f.manifests[h] = manifest
 	return true, nil
+}
+
+// Fingerprints reuse supportsMani: a tier that opts out of one derived
+// artifact opts out of the other, which is how the real providers behave.
+func (f *fakeProvider) PushFingerprint(_ context.Context, h string, fp []byte) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pushFpCalls++
+	if !f.supportsMani {
+		return true, nil
+	}
+	f.fingerprints[h] = fp
+	return true, nil
+}
+
+func (f *fakeProvider) PullFingerprint(_ context.Context, h string) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pullFpCalls++
+	if !f.supportsMani {
+		return nil, ErrNotFound
+	}
+	v, ok := f.fingerprints[h]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return v, nil
 }
 
 func (f *fakeProvider) PullManifest(_ context.Context, h string) ([]byte, error) {

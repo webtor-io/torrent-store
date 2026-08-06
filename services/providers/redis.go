@@ -106,4 +106,27 @@ func (s *Redis) PullManifest(ctx context.Context, h string) (manifest []byte, er
 	return
 }
 
+// fingerprintKey namespaces derived fingerprints alongside manifests, so
+// neither collides with the raw .torrent stored under the bare infoHash.
+func fingerprintKey(h string) string {
+	return "fp:" + h
+}
+
+func (s *Redis) PushFingerprint(ctx context.Context, h string, fp []byte) (ok bool, err error) {
+	cl := s.cl.Get()
+	if err = cl.Set(ctx, fingerprintKey(h), fp, s.exp).Err(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Redis) PullFingerprint(ctx context.Context, h string) (fp []byte, err error) {
+	cl := s.cl.Get()
+	fp, err = cl.Get(ctx, fingerprintKey(h)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, ss.ErrNotFound
+	}
+	return
+}
+
 var _ ss.StoreProvider = (*Redis)(nil)

@@ -152,4 +152,43 @@ func (s *S3) PullManifest(ctx context.Context, h string) (manifest []byte, err e
 	return io.ReadAll(r.Body)
 }
 
+// s3FingerprintKey mirrors s3ManifestKey: derived, immutable, rebuildable,
+// and kept without expiry as the durable tier.
+func s3FingerprintKey(h string) string {
+	return h + ".fingerprint"
+}
+
+func (s *S3) PushFingerprint(ctx context.Context, h string, fp []byte) (ok bool, err error) {
+	cl := s.cl.Get()
+	_, err = cl.PutObjectWithContext(ctx,
+		&s3.PutObjectInput{
+			Bucket:     aws.String(s.bucket),
+			Key:        aws.String(s3FingerprintKey(h)),
+			Body:       bytes.NewReader(fp),
+			ContentMD5: s.makeAWSMD5(fp),
+		})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *S3) PullFingerprint(ctx context.Context, h string) (fp []byte, err error) {
+	cl := s.cl.Get()
+	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(s3FingerprintKey(h)),
+	})
+	if err != nil {
+		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+			return nil, ss.ErrNotFound
+		}
+		return nil, err
+	}
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(r.Body)
+	return io.ReadAll(r.Body)
+}
+
 var _ ss.StoreProvider = (*S3)(nil)
