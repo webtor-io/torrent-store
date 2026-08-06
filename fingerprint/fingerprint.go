@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"sort"
 
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
@@ -68,10 +69,10 @@ func (f Fingerprint) String() string { return f.Kind + ":" + f.Value }
 
 // Compute derives every content identity available from a .torrent.
 //
-// A torrent always yields at least the layout fingerprint. v2 and hybrid
-// torrents additionally yield one file fingerprint per file over the size
-// threshold. The result is deterministic and ordered: layout first, then file
-// fingerprints sorted by the order the file tree walks.
+// A torrent always yields at least the layout fingerprint. v2 torrents
+// additionally yield one file fingerprint per file over the size threshold.
+// The result is deterministic: layout first, then file fingerprints sorted by
+// digest — the file tree itself walks in randomised order.
 func Compute(torrent []byte) ([]Fingerprint, error) {
 	mi, err := metainfo.Load(bytes.NewReader(torrent))
 	if err != nil {
@@ -108,21 +109,30 @@ func fingerprintsFromInfo(info *metainfo.Info) ([]Fingerprint, error) {
 	}
 
 	if info.HasV2() {
+		var v2 []Fingerprint
 		info.FileTree.Walk(nil, func(_ []string, ft *metainfo.FileTree) {
-			root := ft.PiecesRootAsByteArray()
-			if !root.Ok || ft.File.Length < minFingerprintFileLength {
+			// Do NOT call ft.PiecesRootAsByteArray() without this length
+			// check: it panics when the root is present but not exactly 32
+			// bytes, and these torrents arrive from callers. Nothing else in
+			// the service reads the v2 file tree, so this is the only guard.
+			if len(ft.File.PiecesRoot) != sha256.Size || ft.File.Length < minFingerprintFileLength {
 				return
 			}
 			h := sha256.New()
 			h.Write([]byte(FingerprintFile))
 			_ = binary.Write(h, binary.BigEndian, ft.File.Length)
-			h.Write(root.Value[:])
-			res = append(res, Fingerprint{
+			h.Write([]byte(ft.File.PiecesRoot))
+			v2 = append(v2, Fingerprint{
 				Kind:   FingerprintFile,
 				Value:  hex.EncodeToString(h.Sum(nil)),
 				Length: ft.File.Length,
 			})
 		})
+		// FileTree.Walk descends through a map, so it yields files in
+		// randomised order. Sort so the derived blob is byte-stable and two
+		// pods deriving the same torrent cannot disagree.
+		sort.Slice(v2, func(i, j int) bool { return v2[i].Value < v2[j].Value })
+		res = append(res, v2...)
 	}
 
 	if len(res) == 0 {

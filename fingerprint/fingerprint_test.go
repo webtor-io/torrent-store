@@ -2,6 +2,7 @@ package fingerprint
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/anacrolix/torrent/bencode"
@@ -161,5 +162,99 @@ func TestFingerprintString(t *testing.T) {
 	f := Fingerprint{Kind: FingerprintLayout, Value: "abc123"}
 	if got, want := f.String(), "v1layout:abc123"; got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
+	}
+}
+
+// bencode helpers for hand-built v2 torrents: the library's FileTree has a
+// custom unmarshaller and no matching marshaller, so building the bytes
+// directly is both simpler and closer to what an untrusted caller sends.
+func bstr(s string) string { return itoa(len(s)) + ":" + s }
+func bint(n int64) string  { return "i" + itoa64(n) + "e" }
+func itoa(n int) string    { return itoa64(int64(n)) }
+func itoa64(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	if neg {
+		return "-" + string(b)
+	}
+	return string(b)
+}
+
+// v2Torrent builds a meta-version-2 torrent whose file tree carries the given
+// files as name -> (length, piecesRoot).
+func v2Torrent(files [][3]any) []byte {
+	tree := "d"
+	for _, f := range files {
+		name := f[0].(string)
+		length := f[1].(int64)
+		root := f[2].(string)
+		tree += bstr(name) + "d" + bstr("") + "d" +
+			bstr("length") + bint(length) +
+			bstr("pieces root") + bstr(root) +
+			"ee"
+	}
+	tree += "e"
+	info := "d" +
+		bstr("file tree") + tree +
+		bstr("meta version") + bint(2) +
+		bstr("name") + bstr("t") +
+		bstr("piece length") + bint(262144) +
+		"e"
+	return []byte("d" + bstr("info") + info + "e")
+}
+
+// A pieces root that is present but not 32 bytes makes the library's
+// PiecesRootAsByteArray panic. Torrents come from callers, so Compute must
+// refuse the entry instead of taking the process down.
+func TestComputeSurvivesMalformedV2PiecesRoot(t *testing.T) {
+	for _, root := range []string{"", "short", strings.Repeat("x", 31), strings.Repeat("x", 33)} {
+		tor := v2Torrent([][3]any{{"a.bin", int64(8 << 20), root}})
+		// Either an error or an empty result is fine; a panic is not.
+		_, _ = Compute(tor)
+	}
+}
+
+// FileTree.Walk descends a map, so without an explicit sort the order of v2
+// fingerprints changes between calls and the cached blob stops being stable.
+func TestComputeV2OrderIsStable(t *testing.T) {
+	var files [][3]any
+	for i := 0; i < 12; i++ {
+		files = append(files, [3]any{
+			"f" + itoa(i) + ".bin",
+			int64(8 << 20),
+			strings.Repeat(string(rune('a'+i)), 32),
+		})
+	}
+	tor := v2Torrent(files)
+	first, err := Compute(tor)
+	if err != nil {
+		t.Fatalf("Compute: %v", err)
+	}
+	if len(first) < 2 {
+		t.Fatalf("expected several v2 fingerprints, got %d", len(first))
+	}
+	for i := 0; i < 25; i++ {
+		got, err := Compute(tor)
+		if err != nil {
+			t.Fatalf("Compute: %v", err)
+		}
+		if len(got) != len(first) {
+			t.Fatalf("length changed between calls: %d vs %d", len(got), len(first))
+		}
+		for j := range got {
+			if got[j] != first[j] {
+				t.Fatalf("order changed at %d on iteration %d: %+v vs %+v", j, i, got[j], first[j])
+			}
+		}
 	}
 }
