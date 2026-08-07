@@ -329,7 +329,15 @@ func (s *Store) Fingerprint(ctx context.Context, h string, build func(torrent []
 		if err != nil {
 			return nil, err
 		}
-		s.pushFingerprint(ctx, h, fp)
+		// Persist off the request path. The S3 write alone costs ~50ms at the
+		// median — two orders more than the Redis one — and the caller does
+		// not need it to answer: the value is already in hand, the in-process
+		// map holds it, and a lost write only costs a re-derive later, which
+		// is what a failed write already costs.
+		//
+		// context.WithoutCancel so a client disconnecting mid-request does not
+		// abort a write that is no longer on its behalf.
+		go s.pushFingerprint(context.WithoutCancel(ctx), h, fp)
 		return fp, nil
 	})
 }

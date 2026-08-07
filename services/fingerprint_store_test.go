@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
 	pb "github.com/webtor-io/torrent-store/proto"
@@ -93,9 +94,17 @@ func TestStoreFingerprintBuildOnceAndCache(t *testing.T) {
 	if builds != 1 {
 		t.Fatalf("builds = %d, want 1", builds)
 	}
-	if len(fast.fingerprints[h]) == 0 || len(slow.fingerprints[h]) == 0 {
-		t.Fatal("fingerprint not cached in the opted-in tiers")
-	}
+	// Persisting is off the request path now, so wait for it rather than
+	// asserting immediately.
+	waitFor(t, func() bool {
+		fast.mu.Lock()
+		slow.mu.Lock()
+		defer fast.mu.Unlock()
+		defer slow.mu.Unlock()
+		return len(fast.fingerprints[h]) > 0 && len(slow.fingerprints[h]) > 0
+	}, "fingerprint not cached in the opted-in tiers")
+	optOut.mu.Lock()
+	defer optOut.mu.Unlock()
 	if len(optOut.fingerprints) != 0 {
 		t.Fatal("opted-out tier must not cache fingerprints")
 	}
@@ -151,9 +160,11 @@ func TestServerFingerprintServesAndCaches(t *testing.T) {
 	if first.GetValue() == "" || first.GetLength() == 0 {
 		t.Fatalf("malformed fingerprint in reply: %+v", first)
 	}
-	if len(p.fingerprints[h]) == 0 {
-		t.Fatal("derived fingerprint was not cached")
-	}
+	waitFor(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.fingerprints[h]) > 0
+	}, "derived fingerprint was not cached")
 
 	// A second call must not need the torrent at all: drop it and check the
 	// reply still comes back identical, proving it is served from the cache.
@@ -302,4 +313,17 @@ func TestNilAbuseStaysNil(t *testing.T) {
 	if srv.a != nil {
 		t.Fatal("a nil *Abuse became a non-nil interface")
 	}
+}
+
+// waitFor polls cond briefly. The fingerprint is persisted off the request
+// path, so a test that asserted immediately would be racing the write.
+func waitFor(t *testing.T, cond func() bool, msg string) {
+	t.Helper()
+	for i := 0; i < 200; i++ {
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal(msg)
 }
