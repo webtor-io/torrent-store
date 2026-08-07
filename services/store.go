@@ -304,43 +304,15 @@ func (s *Store) pushFingerprint(ctx context.Context, h string, fp []byte) {
 	}
 }
 
-// CachedFingerprint returns an already-derived fingerprint from the FAST tiers
-// only, or ErrNotFound. It never pulls a .torrent and never reaches the
-// durable tier.
+// CachedFingerprint returns an already-derived fingerprint, or ErrNotFound.
+// It reads the cache tiers only — it never pulls or parses a .torrent — so it
+// is safe on a request that would otherwise be a single cache read.
 //
-// Skipping the durable tier is the point. A fingerprint that is not in Redis
-// is usually not anywhere, and walking on to S3 turns every miss into a
-// cross-network round trip that 404s — measured as the residue that kept Files
-// at a 25ms median against 11ms before any of this. The caller treats a miss
-// as "no opportunistic check available", so paying 50ms to be a little more
-// certain of a negative buys nothing.
+// The in-process map is deliberately bypassed: lazymap.Status reads its map
+// without holding the lock (confirmed under -race), so probing for a warm
+// entry would introduce a data race to save a sub-millisecond Redis GET.
 func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error) {
-	for _, p := range s.providers {
-		if !isFastTier(p) {
-			continue
-		}
-		fp, err := p.PullFingerprint(ctx, h)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		} else if err != nil {
-			return nil, err
-		}
-		return fp, nil
-	}
-	return nil, ErrNotFound
-}
-
-// isFastTier reports whether a provider answers from memory or the local
-// network. Named rather than inferred: the tier list is fixed and small, and
-// an ordering rule ("everything but the last") would silently change meaning
-// the day a provider is added.
-func isFastTier(p StoreProvider) bool {
-	switch p.Name() {
-	case "s3":
-		return false
-	default:
-		return true
-	}
+	return s.pullFingerprint(ctx, h, 0)
 }
 
 // CacheFingerprint stores an already-derived fingerprint without blocking the
