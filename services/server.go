@@ -204,6 +204,10 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 			return &pb.PushReply{InfoHash: infoHash}, nil
 		} else {
 			payload = merged
+			// The payload differs from what pushm may have cached for this
+			// infoHash minutes ago; without the drop the cached `true` would
+			// swallow the write and the merged announces would be lost.
+			s.s.pushm.Drop(infoHash)
 			hLog.WithField("merged_len", len(merged)).Info("merged announces from existing torrent")
 		}
 	}
