@@ -343,3 +343,32 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 	}
 	t.Fatal(msg)
 }
+
+// CachedFingerprint must not reach the durable tier: a miss there is a
+// cross-network round trip on a request that is otherwise a cache read.
+func TestCachedFingerprintSkipsTheDurableTier(t *testing.T) {
+	fast := newFakeProvider("redis", true)
+	durable := newFakeProvider("s3", true)
+	store := NewStore([]StoreProvider{fast, durable})
+
+	const h = "feedface"
+	payload := []byte("abc\t1\n")
+	_, _ = durable.PushFingerprint(context.Background(), h, payload)
+
+	if _, err := store.CachedFingerprint(context.Background(), h); err == nil {
+		t.Fatal("read from the durable tier; it must be skipped")
+	}
+	durable.mu.Lock()
+	calls := durable.pullFpCalls
+	durable.mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("durable tier was queried %d times, want 0", calls)
+	}
+
+	// Present in the fast tier, it is returned.
+	_, _ = fast.PushFingerprint(context.Background(), h, payload)
+	got, err := store.CachedFingerprint(context.Background(), h)
+	if err != nil || string(got) != string(payload) {
+		t.Fatalf("fast-tier hit failed: %q %v", got, err)
+	}
+}
