@@ -68,12 +68,12 @@ func NewStore(providers []StoreProvider) *Store {
 		revProviders = append(revProviders, providers[i])
 	}
 	return &Store{
-		pullm:        &pullm,
-		pushm:        &pushm,
-		touchm:       &touchm,
-		manifestm:    &manifestm,
-		fingerprintm: &fingerprintm,
-		ratem:        &ratem,
+		pullm:        pullm,
+		pushm:        pushm,
+		touchm:       touchm,
+		manifestm:    manifestm,
+		fingerprintm: fingerprintm,
+		ratem:        ratem,
 		providers:    providers,
 		revProviders: revProviders,
 	}
@@ -313,6 +313,14 @@ func (s *Store) pushFingerprint(ctx context.Context, h string, fp []byte) {
 // entry would introduce a data race to save a sub-millisecond Redis GET.
 func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error) {
 	return s.pullFingerprint(ctx, h, 0)
+}
+
+// CacheFingerprint stores an already-derived fingerprint without blocking the
+// caller. Used where the bytes were free — the torrent was in hand anyway —
+// so the value costs nothing to produce and everything downstream can read it.
+func (s *Store) CacheFingerprint(ctx context.Context, h string, fp []byte) {
+	s.fingerprintm.Touch(h)
+	go s.pushFingerprint(ctx, h, fp)
 }
 
 // Fingerprint returns the cached content fingerprints for h, deriving them via

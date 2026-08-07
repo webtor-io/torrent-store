@@ -349,13 +349,17 @@ func (s *Server) checkPayloadAbuseCached(ctx context.Context, h string, hLog *lo
 	}
 	blob, err := s.s.CachedFingerprint(ctx, h)
 	if err != nil {
-		// Not derived yet. Warm it for next time, off this request.
-		go func() {
-			bg := context.WithoutCancel(ctx)
-			if _, derr := s.s.Fingerprint(bg, h, buildFingerprint); derr != nil {
-				log.WithField("infoHash", h).WithError(derr).Debug("background fingerprint derive failed")
-			}
-		}()
+		// Not derived yet, and deliberately not derived here. Measured in
+		// production: 147 derives per 154 Files responses — the cache almost
+		// never hits, because listings are overwhelmingly for torrents seen
+		// once. Warming it in the background cost a pull and parse on nearly
+		// every request while the check itself still could not run, so it was
+		// all cost and no cover.
+		//
+		// The fingerprint is instead derived where the bytes are already in
+		// hand: Push (ingest) and Pull (the .torrent that actually enables
+		// downloading), both of which check unconditionally. Files returns a
+		// listing, and it checks whenever a fingerprint happens to exist.
 		return nil
 	}
 	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)
@@ -374,6 +378,10 @@ func (s *Server) checkPayloadAbuseBytes(ctx context.Context, h string, torrent [
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
 		return nil
 	}
+	// Persist off the request path. This is the only place a fingerprint is
+	// ever derived, so it is also what lets Files check at all — Files will
+	// not fetch a .torrent of its own.
+	s.s.CacheFingerprint(context.WithoutCancel(ctx), h, blob)
 	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)
 }
 

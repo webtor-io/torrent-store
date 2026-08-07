@@ -270,10 +270,15 @@ func TestPayloadBlockedUnderAnotherInfohash(t *testing.T) {
 	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); err != nil {
 		t.Fatalf("Files: first call should pass while the fingerprint is cold, got %v", err)
 	}
+	// Pull derives it from the bytes it already holds; that is what warms
+	// the cache Files then reads.
+	if _, err := srv.Pull(context.Background(), &pb.PullRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Pull: code = %v, want PermissionDenied", status.Code(err))
+	}
 	waitFor(t, func() bool {
 		_, err := srv.s.CachedFingerprint(context.Background(), h)
 		return err == nil
-	}, "background fingerprint derive never completed")
+	}, "Pull did not persist the fingerprint")
 	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Files: code = %v (err %v), want PermissionDenied once warm", status.Code(err), err)
 	}
