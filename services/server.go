@@ -109,7 +109,7 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	if err != nil {
 		return nil, err
 	}
-	if err = s.checkPayloadAbuse(ctx, in.GetInfoHash(), hLog, t); err != nil {
+	if err = s.checkPayloadAbuseBytes(ctx, in.GetInfoHash(), torrent, hLog, t); err != nil {
 		return nil, err
 	}
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
@@ -261,7 +261,7 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 		return nil, errors.Wrapf(err, "failed to get manifest infoHash=%v", infoHash)
 	}
 
-	if err = s.checkPayloadAbuse(ctx, infoHash, hLog, t); err != nil {
+	if err = s.checkPayloadAbuseCached(ctx, infoHash, hLog, t); err != nil {
 		return nil, err
 	}
 
@@ -332,15 +332,30 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 // A failure here is logged and allowed through. The infoHash check is the hard
 // legal gate and has already run; this arm is coverage of re-uploads, and
 // taking the service down when the lookup is flaky would be the worse trade.
-func (s *Server) checkPayloadAbuse(ctx context.Context, h string, hLog *log.Entry, t time.Time) error {
+// checkPayloadAbuseCached is the read-path variant, used where the torrent
+// bytes are NOT already in hand — Files answers from the cached manifest and
+// never touches the .torrent.
+//
+// It therefore refuses to fetch one either. Deriving a fingerprint costs a
+// full pull and parse, and putting that on a request that would otherwise be
+// a single cache read regressed Files from an 11ms median to 28ms in
+// production. When the fingerprint is not cached yet the derive is kicked off
+// in the background and THIS request goes through unchecked on the payload
+// arm — the infoHash arm, which is the hard legal gate, has already run, and
+// the next request for the same torrent is covered.
+func (s *Server) checkPayloadAbuseCached(ctx context.Context, h string, hLog *log.Entry, t time.Time) error {
 	if s.a == nil {
 		return nil
 	}
-	blob, err := s.s.Fingerprint(ctx, h, func(torrent []byte) ([]byte, error) {
-		return buildFingerprint(torrent)
-	})
+	blob, err := s.s.CachedFingerprint(ctx, h)
 	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
+		// Not derived yet. Warm it for next time, off this request.
+		go func() {
+			bg := context.WithoutCancel(ctx)
+			if _, derr := s.s.Fingerprint(bg, h, buildFingerprint); derr != nil {
+				log.WithField("infoHash", h).WithError(derr).Debug("background fingerprint derive failed")
+			}
+		}()
 		return nil
 	}
 	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)

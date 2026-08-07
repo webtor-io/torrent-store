@@ -304,6 +304,17 @@ func (s *Store) pushFingerprint(ctx context.Context, h string, fp []byte) {
 	}
 }
 
+// CachedFingerprint returns an already-derived fingerprint, or ErrNotFound.
+// It reads the cache tiers only — it never pulls or parses a .torrent — so it
+// is safe on a request that would otherwise be a single cache read.
+//
+// The in-process map is deliberately bypassed: lazymap.Status reads its map
+// without holding the lock (confirmed under -race), so probing for a warm
+// entry would introduce a data race to save a sub-millisecond Redis GET.
+func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error) {
+	return s.pullFingerprint(ctx, h, 0)
+}
+
 // Fingerprint returns the cached content fingerprints for h, deriving them via
 // build() from the stored .torrent on a miss and persisting them across tiers.
 // Singleflighted per infoHash, and immutable per infoHash like a manifest, so

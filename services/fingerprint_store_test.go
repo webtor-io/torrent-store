@@ -263,8 +263,19 @@ func TestPayloadBlockedUnderAnotherInfohash(t *testing.T) {
 	srv, h, raw := serverWithTorrent(t, a)
 	a.byDigest[digestOf(t, raw)] = true
 
+	// Pull and Push hold the torrent bytes, so they block on the first call.
+	// Files answers from the cached manifest and refuses to fetch a torrent
+	// just to fingerprint it, so it blocks only once the fingerprint is warm —
+	// the first call goes through and warms it in the background.
+	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); err != nil {
+		t.Fatalf("Files: first call should pass while the fingerprint is cold, got %v", err)
+	}
+	waitFor(t, func() bool {
+		_, err := srv.s.CachedFingerprint(context.Background(), h)
+		return err == nil
+	}, "background fingerprint derive never completed")
 	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("Files: code = %v (err %v), want PermissionDenied", status.Code(err), err)
+		t.Fatalf("Files: code = %v (err %v), want PermissionDenied once warm", status.Code(err), err)
 	}
 	if _, err := srv.Pull(context.Background(), &pb.PullRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("Pull: code = %v (err %v), want PermissionDenied", status.Code(err), err)
