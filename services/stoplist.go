@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"fmt"
 	"regexp"
 	"runtime"
@@ -10,7 +9,6 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
-	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -100,16 +98,8 @@ func NewStoplist(c *cli.Context) (*Stoplist, error) {
 	}, nil
 }
 
-func (s *Stoplist) getData(b []byte) ([]string, error) {
-	reader := bytes.NewReader(b)
-	mi, err := metainfo.Load(reader)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse torrent")
-	}
-	i, err := mi.UnmarshalInfo()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal torrent info")
-	}
+func (s *Stoplist) getData(pt *parsedTorrent) []string {
+	mi, i := pt.mi, &pt.info
 	var data []string
 	data = append(data, i.Name)
 	for _, file := range i.Files {
@@ -140,7 +130,7 @@ func (s *Stoplist) getData(b []byte) ([]string, error) {
 	if mi.CreatedBy != "" {
 		data = append(data, mi.CreatedBy)
 	}
-	return data, nil
+	return data
 }
 
 // truncateRunes returns the first `max` runes of s. Used to cap
@@ -155,10 +145,20 @@ func truncateRunes(s string, max int) string {
 	return string(runes[:max])
 }
 
-// Check normalises every data string (name, file paths, tracker URLs,
-// comment, createdBy) and runs the full stoplist rule tree over each.
-// Returns the first positive CheckResult or an empty one when no rule
-// fires.
+// Check parses raw torrent bytes and runs CheckParsed. Kept for callers
+// without a parse in hand (standalone tools, tests); request paths parse once
+// and use CheckParsed directly.
+func (s *Stoplist) Check(b []byte) (*sl.CheckResult, error) {
+	pt, err := parseTorrent(b)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get torrent text data")
+	}
+	return s.CheckParsed(pt)
+}
+
+// CheckParsed normalises every data string (name, file paths, comment,
+// createdBy) and runs the full stoplist rule tree over each. Returns the
+// first positive CheckResult or an empty one when no rule fires.
 //
 // Heavyweight packs ship 4000+ data strings, so the loop is run in
 // parallel across runtime.GOMAXPROCS workers. The stoplist library's
@@ -173,11 +173,8 @@ func truncateRunes(s string, max int) string {
 // case where multiple data strings would match — we only persist
 // found/not-found and a Prometheus rule-label, so the indeterminism
 // is acceptable.
-func (s *Stoplist) Check(b []byte) (*sl.CheckResult, error) {
-	data, err := s.getData(b)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to get torrent text data")
-	}
+func (s *Stoplist) CheckParsed(pt *parsedTorrent) (*sl.CheckResult, error) {
+	data := s.getData(pt)
 	if len(data) == 0 {
 		return &sl.CheckResult{}, nil
 	}

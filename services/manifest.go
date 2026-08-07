@@ -1,10 +1,6 @@
 package services
 
 import (
-	"bytes"
-
-	"github.com/anacrolix/torrent/metainfo"
-	"github.com/pkg/errors"
 	pb "github.com/webtor-io/torrent-store/proto"
 )
 
@@ -13,14 +9,16 @@ import (
 // matching the rest-api convention) and size. Piece hashes are dropped —
 // they aren't needed for listing and dominate the .torrent size.
 func buildManifest(torrent []byte) (*pb.FilesReply, error) {
-	mi, err := metainfo.Load(bytes.NewReader(torrent))
+	pt, err := parseTorrent(torrent)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to load torrent")
+		return nil, err
 	}
-	info, err := mi.UnmarshalInfo()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal info")
-	}
+	return buildManifestParsed(pt)
+}
+
+// buildManifestParsed is buildManifest for callers that already hold a parse.
+func buildManifestParsed(pt *parsedTorrent) (*pb.FilesReply, error) {
+	info := &pt.info
 	name := info.Name
 	if info.NameUtf8 != "" {
 		name = info.NameUtf8

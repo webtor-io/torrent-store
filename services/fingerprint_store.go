@@ -17,7 +17,18 @@ import (
 // read far more often than it is written, and staying greppable means an
 // operator can read it straight out of Redis or S3 without tooling.
 func buildFingerprint(torrent []byte) ([]byte, error) {
-	fps, err := fingerprint.Compute(torrent)
+	pt, err := parseTorrent(torrent)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to compute fingerprints")
+	}
+	return buildFingerprintParsed(pt)
+}
+
+// buildFingerprintParsed is buildFingerprint for callers that already hold a
+// parse; the request paths do, and re-parsing the piece table is the dominant
+// cost of deriving.
+func buildFingerprintParsed(pt *parsedTorrent) ([]byte, error) {
+	fps, err := fingerprint.ComputeInfo(&pt.info)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to compute fingerprints")
 	}

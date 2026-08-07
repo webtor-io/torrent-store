@@ -1,12 +1,10 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"time"
 
-	"github.com/anacrolix/torrent/metainfo"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -99,46 +97,33 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to pull")
 		return nil, errors.Wrapf(err, "failed to pull torrent infoHash=%v", in.GetInfoHash())
 	}
-	err = s.checkStoplist(torrent, hLog, t, in.GetInfoHash())
+	pt, err := parseTorrent(torrent)
+	if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to parse stored torrent")
+		return nil, errors.Wrapf(err, "failed to parse stored torrent infoHash=%v", in.GetInfoHash())
+	}
+	err = s.checkStoplist(pt, hLog, t, in.GetInfoHash())
 	if err != nil {
 		return nil, err
 	}
 	// Guards consumers against malformed torrents stored before geometry
 	// validation existed on Push.
-	err = s.checkGeometry(torrent, hLog, t, in.GetInfoHash())
-	if err != nil {
-		return nil, err
+	if err := ValidateInfoGeometry(&pt.info); err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("malformed torrent")
+		return nil, status.Errorf(codes.FailedPrecondition, "malformed torrent infoHash=%v: %v", in.GetInfoHash(), err)
 	}
-	if err = s.checkPayloadAbuseBytes(ctx, in.GetInfoHash(), torrent, hLog, t); err != nil {
+	if err = s.checkPayloadAbuseBytes(ctx, in.GetInfoHash(), pt, hLog, t); err != nil {
 		return nil, err
 	}
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
 	return &pb.PullReply{Torrent: []byte(torrent)}, nil
 }
 
-func (s *Server) checkGeometry(torrent []byte, log *log.Entry, t time.Time, hash string) error {
-	mi, err := metainfo.Load(bytes.NewReader(torrent))
-	if err != nil {
-		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to parse stored torrent")
-		return errors.Wrapf(err, "failed to parse stored torrent infoHash=%v", hash)
-	}
-	info, err := mi.UnmarshalInfo()
-	if err != nil {
-		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal stored info")
-		return errors.Wrapf(err, "failed to unmarshal stored info infoHash=%v", hash)
-	}
-	if err := ValidateInfoGeometry(&info); err != nil {
-		log.WithField("duration", time.Since(t)).WithError(err).Warn("malformed torrent")
-		return status.Errorf(codes.FailedPrecondition, "malformed torrent infoHash=%v: %v", hash, err)
-	}
-	return nil
-}
-
-func (s *Server) checkStoplist(torrent []byte, log *log.Entry, t time.Time, hash string) error {
+func (s *Server) checkStoplist(pt *parsedTorrent, log *log.Entry, t time.Time, hash string) error {
 	if s.sl == nil {
 		return nil
 	}
-	cr, err := s.sl.Check(torrent)
+	cr, err := s.sl.CheckParsed(pt)
 	if err != nil {
 		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to check stoplist")
 		return errors.Wrapf(err, "failed to check stoplist infoHash=%v", hash)
@@ -152,17 +137,16 @@ func (s *Server) checkStoplist(torrent []byte, log *log.Entry, t time.Time, hash
 
 func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, error) {
 	t := time.Now()
-	reader := bytes.NewReader(in.GetTorrent())
-	mi, err := metainfo.Load(reader)
+	pt, err := parseTorrent(in.GetTorrent())
 	if err != nil {
 		log.WithError(err).Error("failed to read torrent")
-		return nil, err
+		return nil, status.Errorf(codes.InvalidArgument, "failed to parse torrent: %v", err)
 	}
-	infoHash := mi.HashInfoBytes().HexString()
+	infoHash := pt.mi.HashInfoBytes().HexString()
 	hLog := log.WithField("infoHash", infoHash).WithField("method", "push")
 	hLog.Info("push torrent request")
 
-	err = s.checkStoplist(in.GetTorrent(), hLog, t, infoHash)
+	err = s.checkStoplist(pt, hLog, t, infoHash)
 	if err != nil {
 		return nil, err
 	}
@@ -177,16 +161,11 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
 	}
 
-	if err = s.checkPayloadAbuseBytes(ctx, infoHash, in.GetTorrent(), hLog, t); err != nil {
+	if err = s.checkPayloadAbuseBytes(ctx, infoHash, pt, hLog, t); err != nil {
 		return nil, err
 	}
 
-	info, err := mi.UnmarshalInfo()
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal info")
-		return nil, status.Errorf(codes.InvalidArgument, "failed to unmarshal info infoHash=%v: %v", infoHash, err)
-	}
-	if err := ValidateInfoGeometry(&info); err != nil {
+	if err := ValidateInfoGeometry(&pt.info); err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("malformed torrent rejected")
 		return nil, status.Errorf(codes.InvalidArgument, "malformed torrent infoHash=%v: %v", infoHash, err)
 	}
@@ -243,11 +222,15 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	}
 
 	manifest, err := s.s.Manifest(ctx, infoHash, func(torrent []byte) ([]byte, error) {
+		pt, perr := parseTorrent(torrent)
+		if perr != nil {
+			return nil, perr
+		}
 		// Stoplist is enforced at build time, when we have the torrent bytes.
-		if serr := s.checkStoplist(torrent, hLog, t, infoHash); serr != nil {
+		if serr := s.checkStoplist(pt, hLog, t, infoHash); serr != nil {
 			return nil, serr
 		}
-		reply, berr := buildManifest(torrent)
+		reply, berr := buildManifestParsed(pt)
 		if berr != nil {
 			return nil, berr
 		}
@@ -298,10 +281,14 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 	}
 
 	blob, err := s.s.Fingerprint(ctx, infoHash, func(torrent []byte) ([]byte, error) {
-		if serr := s.checkStoplist(torrent, hLog, t, infoHash); serr != nil {
+		pt, perr := parseTorrent(torrent)
+		if perr != nil {
+			return nil, perr
+		}
+		if serr := s.checkStoplist(pt, hLog, t, infoHash); serr != nil {
 			return nil, serr
 		}
-		return buildFingerprint(torrent)
+		return buildFingerprintParsed(pt)
 	})
 	if errors.Is(err, ErrNotFound) {
 		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
@@ -373,11 +360,11 @@ func (s *Server) checkPayloadAbuseCached(ctx context.Context, h string, hLog *lo
 // the fingerprint is derived directly instead of through the store. Refusing
 // here keeps a payload that is already blocked from being stored at all,
 // rather than storing it and refusing on every later read.
-func (s *Server) checkPayloadAbuseBytes(ctx context.Context, h string, torrent []byte, hLog *log.Entry, t time.Time) error {
+func (s *Server) checkPayloadAbuseBytes(ctx context.Context, h string, pt *parsedTorrent, hLog *log.Entry, t time.Time) error {
 	if s.a == nil {
 		return nil
 	}
-	blob, err := buildFingerprint(torrent)
+	blob, err := buildFingerprintParsed(pt)
 	if err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
 		return nil

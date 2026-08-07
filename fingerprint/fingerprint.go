@@ -78,6 +78,12 @@ func Compute(torrent []byte) ([]Fingerprint, error) {
 	return fingerprintsFromInfo(&info)
 }
 
+// ComputeInfo derives fingerprints from an already-unmarshalled info dict,
+// for callers that parsed the .torrent once and hand the result around.
+func ComputeInfo(info *metainfo.Info) ([]Fingerprint, error) {
+	return fingerprintsFromInfo(info)
+}
+
 func fingerprintsFromInfo(info *metainfo.Info) ([]Fingerprint, error) {
 	var res []Fingerprint
 

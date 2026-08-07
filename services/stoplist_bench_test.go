@@ -51,10 +51,11 @@ func BenchmarkStoplistCheck(b *testing.B) {
 	torrent := loadBenchTorrent(b)
 
 	// Warm up: build the data slice once to confirm parse works.
-	data, err := s.getData(torrent)
+	pt, err := parseTorrent(torrent)
 	if err != nil {
-		b.Fatalf("getData: %v", err)
+		b.Fatalf("parseTorrent: %v", err)
 	}
+	data := s.getData(pt)
 	b.Logf("torrent has %d data strings (name + paths + trackers + comment + createdBy)", len(data))
 
 	b.ResetTimer()
