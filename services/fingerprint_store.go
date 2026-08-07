@@ -45,7 +45,12 @@ func parseFingerprint(blob []byte) []fingerprint.Fingerprint {
 		value := parts[0]
 		// Blobs written before the scheme label was dropped look like
 		// "v1layout:<hex>". Only one scheme ever existed, so take the digest
-		// and move on. Removable once the caches have rolled.
+		// and move on.
+		//
+		// Load-bearing, not a leftover: S3 fingerprint objects carry no expiry,
+		// so old-format blobs sit there until that torrent is pulled again and
+		// the entry is rewritten. Removing this would make those torrents
+		// unfingerprintable rather than merely stale.
 		if i := strings.LastIndex(value, ":"); i >= 0 {
 			value = value[i+1:]
 		}

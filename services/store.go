@@ -319,7 +319,6 @@ func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error)
 // caller. Used where the bytes were free — the torrent was in hand anyway —
 // so the value costs nothing to produce and everything downstream can read it.
 func (s *Store) CacheFingerprint(ctx context.Context, h string, fp []byte) {
-	s.fingerprintm.Touch(h)
 	go s.pushFingerprint(ctx, h, fp)
 }
 
