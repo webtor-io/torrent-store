@@ -80,22 +80,12 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	hLog := log.WithField("infoHash", in.GetInfoHash()).WithField("method", "pull")
 	hLog.Info("pull torrent request")
 
-	abused, err := s.isAbused(ctx, in.GetInfoHash())
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to check abuse")
-		return nil, errors.Wrapf(err, "failed to check abuse infoHash=%v", in.GetInfoHash())
-	}
-	if abused {
-		hLog.WithField("duration", time.Since(t)).Warn("abused")
-		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", in.GetInfoHash())
+	if err := s.gateInfoHash(ctx, in.GetInfoHash(), hLog, t); err != nil {
+		return nil, err
 	}
 	torrent, err := s.s.Pull(ctx, in.GetInfoHash())
-	if errors.Is(err, ErrNotFound) {
-		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
-		return nil, status.Errorf(codes.NotFound, "unable to find torrent for infoHash=%v", in.GetInfoHash())
-	} else if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to pull")
-		return nil, errors.Wrapf(err, "failed to pull torrent infoHash=%v", in.GetInfoHash())
+	if err != nil {
+		return nil, rpcError(err, hLog, t, in.GetInfoHash(), "failed to pull torrent")
 	}
 	pt, err := parseTorrent(torrent)
 	if err != nil {
@@ -112,7 +102,7 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("malformed torrent")
 		return nil, status.Errorf(codes.FailedPrecondition, "malformed torrent infoHash=%v: %v", in.GetInfoHash(), err)
 	}
-	if err = s.checkPayloadAbuseBytes(ctx, in.GetInfoHash(), pt, hLog, t); err != nil {
+	if err = s.gatePayload(ctx, in.GetInfoHash(), pt, hLog, t); err != nil {
 		return nil, err
 	}
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
@@ -151,17 +141,10 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 		return nil, err
 	}
 
-	abused, err := s.isAbused(ctx, infoHash)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to check abuse")
-		return nil, errors.Wrapf(err, "failed to check abuse infoHash=%v", infoHash)
+	if err = s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
+		return nil, err
 	}
-	if abused {
-		hLog.WithField("duration", time.Since(t)).Warn("abused")
-		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
-	}
-
-	if err = s.checkPayloadAbuseBytes(ctx, infoHash, pt, hLog, t); err != nil {
+	if err = s.gatePayload(ctx, infoHash, pt, hLog, t); err != nil {
 		return nil, err
 	}
 
@@ -208,17 +191,11 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	hLog := log.WithField("infoHash", infoHash).WithField("method", "files")
 	hLog.Info("files manifest request")
 
-	// Abuse is the hard legal gate (CSAM etc.) and is checked on every call,
-	// including manifest cache hits, so a torrent banned after its manifest
-	// was cached stops being listable immediately.
-	abused, err := s.isAbused(ctx, infoHash)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to check abuse")
-		return nil, errors.Wrapf(err, "failed to check abuse infoHash=%v", infoHash)
-	}
-	if abused {
-		hLog.WithField("duration", time.Since(t)).Warn("abused")
-		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
+	// The gate runs on every call, including manifest cache hits, so a
+	// torrent banned after its manifest was cached stops being listable
+	// immediately.
+	if err := s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
+		return nil, err
 	}
 
 	manifest, err := s.s.Manifest(ctx, infoHash, func(torrent []byte) ([]byte, error) {
@@ -236,19 +213,11 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 		}
 		return proto.Marshal(reply)
 	})
-	if errors.Is(err, ErrNotFound) {
-		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
-		return nil, status.Errorf(codes.NotFound, "unable to find torrent for infoHash=%v", infoHash)
-	} else if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
-		// Preserve gRPC status set during build (e.g. stoplist PermissionDenied)
-		// instead of flattening it into an Internal error.
-		return nil, err
-	} else if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to get manifest")
-		return nil, errors.Wrapf(err, "failed to get manifest infoHash=%v", infoHash)
+	if err != nil {
+		return nil, rpcError(err, hLog, t, infoHash, "failed to get manifest")
 	}
 
-	if err = s.checkPayloadAbuseCached(ctx, infoHash, hLog, t); err != nil {
+	if err = s.gatePayload(ctx, infoHash, nil, hLog, t); err != nil {
 		return nil, err
 	}
 
@@ -261,23 +230,18 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	return reply, nil
 }
 
-// Fingerprint mirrors Files: abuse is the hard gate checked on every call
-// including cache hits, the stoplist is enforced at build time when the
-// torrent bytes are in hand, and the derived value is cached across tiers.
+// Fingerprint mirrors Files: the infoHash gate runs on every call including
+// cache hits, the stoplist is enforced at build time when the torrent bytes
+// are in hand, and the derived value is cached across tiers. The payload arm
+// deliberately does not run here — see the matrix in abuse_gate.go.
 func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*pb.FingerprintReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
 	hLog := log.WithField("infoHash", infoHash).WithField("method", "fingerprint")
 	hLog.Info("fingerprint request")
 
-	abused, err := s.isAbused(ctx, infoHash)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to check abuse")
-		return nil, errors.Wrapf(err, "failed to check abuse infoHash=%v", infoHash)
-	}
-	if abused {
-		hLog.WithField("duration", time.Since(t)).Warn("abused")
-		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
+	if err := s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
+		return nil, err
 	}
 
 	blob, err := s.s.Fingerprint(ctx, infoHash, func(torrent []byte) ([]byte, error) {
@@ -290,16 +254,8 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 		}
 		return buildFingerprintParsed(pt)
 	})
-	if errors.Is(err, ErrNotFound) {
-		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
-		return nil, status.Errorf(codes.NotFound, "unable to find torrent for infoHash=%v", infoHash)
-	} else if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
-		// Preserve the gRPC status set during build (e.g. stoplist
-		// PermissionDenied) instead of flattening it into Internal.
-		return nil, err
-	} else if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to get fingerprint")
-		return nil, errors.Wrapf(err, "failed to get fingerprint infoHash=%v", infoHash)
+	if err != nil {
+		return nil, rpcError(err, hLog, t, infoHash, "failed to get fingerprint")
 	}
 
 	fps := parseFingerprint(blob)
@@ -312,93 +268,25 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 	return reply, nil
 }
 
-// checkPayloadAbuse blocks a torrent whose PAYLOAD is blocked, even though its
-// own infoHash has never been reported. Republishing one payload under a new
-// name produces a new infoHash and would otherwise walk straight past the
-// per-infoHash check.
-//
-// Runs after that check, not instead of it: the infoHash arm needs no torrent
-// bytes, so a known-bad hash is refused without ever fetching anything.
-//
-// A failure here is logged and allowed through. The infoHash check is the hard
-// legal gate and has already run; this arm is coverage of re-uploads, and
-// taking the service down when the lookup is flaky would be the worse trade.
-// checkPayloadAbuseCached is the read-path variant, used where the torrent
-// bytes are NOT already in hand — Files answers from the cached manifest and
-// never touches the .torrent.
-//
-// It therefore refuses to fetch one either. Deriving a fingerprint costs a
-// full pull and parse, and putting that on a request that would otherwise be
-// a single cache read regressed Files from an 11ms median to 28ms in
-// production. When the fingerprint is not cached yet the derive is kicked off
-// in the background and THIS request goes through unchecked on the payload
-// arm — the infoHash arm, which is the hard legal gate, has already run, and
-// the next request for the same torrent is covered.
-func (s *Server) checkPayloadAbuseCached(ctx context.Context, h string, hLog *log.Entry, t time.Time) error {
-	if s.a == nil {
-		return nil
+// rpcError triages an internal error into the reply: ErrNotFound becomes
+// codes.NotFound, an error already carrying a gRPC status (e.g. the
+// stoplist's PermissionDenied surfacing from a build callback) is preserved
+// rather than flattened into Internal, and anything else is logged and
+// wrapped with msg.
+func rpcError(err error, hLog *log.Entry, t time.Time, h string, msg string) error {
+	if errors.Is(err, ErrNotFound) {
+		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
+		return status.Errorf(codes.NotFound, "unable to find torrent for infoHash=%v", h)
 	}
-	blob, err := s.s.CachedFingerprint(ctx, h)
-	if err != nil {
-		// Not derived yet, and deliberately not derived here. Measured in
-		// production: 147 derives per 154 Files responses — the cache almost
-		// never hits, because listings are overwhelmingly for torrents seen
-		// once. Warming it in the background cost a pull and parse on nearly
-		// every request while the check itself still could not run, so it was
-		// all cost and no cover.
-		//
-		// The fingerprint is instead derived where the bytes are already in
-		// hand: Push (ingest) and Pull (the .torrent that actually enables
-		// downloading), both of which check unconditionally. Files returns a
-		// listing, and it checks whenever a fingerprint happens to exist.
-		return nil
+	if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
+		return err
 	}
-	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)
+	hLog.WithField("duration", time.Since(t)).WithError(err).Error(msg)
+	return errors.Wrapf(err, "%s infoHash=%v", msg, h)
 }
 
-// checkPayloadAbuseBytes is the Push-side variant: the torrent is in hand, so
-// the fingerprint is derived directly instead of through the store. Refusing
-// here keeps a payload that is already blocked from being stored at all,
-// rather than storing it and refusing on every later read.
-func (s *Server) checkPayloadAbuseBytes(ctx context.Context, h string, pt *parsedTorrent, hLog *log.Entry, t time.Time) error {
-	if s.a == nil {
-		return nil
-	}
-	blob, err := buildFingerprintParsed(pt)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
-		return nil
-	}
-	// Persist off the request path. This is the only place a fingerprint is
-	// ever derived, so it is also what lets Files check at all — Files will
-	// not fetch a .torrent of its own.
-	s.s.CacheFingerprint(context.WithoutCancel(ctx), h, blob)
-	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)
-}
-
-func (s *Server) checkPayloadDigest(ctx context.Context, h string, digest []byte, hLog *log.Entry, t time.Time) error {
-	if len(digest) == 0 {
-		return nil
-	}
-	blocked, err := s.a.CheckFingerprint(ctx, digest)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to check payload abuse, skipping")
-		return nil
-	}
-	if blocked {
-		hLog.WithField("duration", time.Since(t)).Warn("payload abused under another infoHash")
-		return status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", h)
-	}
-	return nil
-}
-
-func (s *Server) isAbused(ctx context.Context, h string) (bool, error) {
-	if s.a == nil {
-		return false, nil
-	}
-	return s.a.Get(ctx, h)
-}
-
+// Touch runs no abuse gate at all — see the matrix in abuse_gate.go: it only
+// refreshes the storage TTL, and serving is gated at Pull/Files.
 func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
@@ -406,12 +294,8 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 	hLog.Info("touch torrent request")
 
 	_, err := s.s.Touch(ctx, infoHash)
-	if errors.Is(err, ErrNotFound) {
-		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
-		return nil, status.Errorf(codes.NotFound, "torrent not found infoHash=%v", infoHash)
-	} else if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to touch")
-		return nil, errors.Wrapf(err, "failed to touch torrent infoHash=%v", infoHash)
+	if err != nil {
+		return nil, rpcError(err, hLog, t, infoHash, "failed to touch torrent")
 	}
 
 	hLog.WithField("duration", time.Since(t)).Info("sending touch reply")
