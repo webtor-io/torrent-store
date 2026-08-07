@@ -164,10 +164,10 @@ func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, 
 		if torrent != nil {
 			for j := 0; j < i; j++ {
 				log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).Info("provider push")
-				_, err = s.providers[j].Push(ctx, h, torrent)
-				if err != nil {
-					log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[j].Name()).WithError(err).Warn("provider not pushed")
-					continue
+				// Backfill failure is local: the torrent is already in hand,
+				// and an upper cache tier being down must not fail the pull.
+				if _, perr := s.providers[j].Push(ctx, h, torrent); perr != nil {
+					log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[j].Name()).WithError(perr).Warn("provider not pushed")
 				}
 			}
 		}
