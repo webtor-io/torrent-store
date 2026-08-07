@@ -319,11 +319,23 @@ func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error)
 	return s.pullFingerprint(ctx, h, 0)
 }
 
-// CacheFingerprint stores an already-derived fingerprint without blocking the
-// caller. Used where the bytes were free — the torrent was in hand anyway —
-// so the value costs nothing to produce and everything downstream can read it.
+// CacheFingerprint makes sure an already-derived fingerprint is cached,
+// without blocking the caller. Used where the bytes were free — the torrent
+// was in hand anyway — so the value costs nothing to produce and everything
+// downstream can read it.
+//
+// It probes the tiers before writing: Pull re-derives the fingerprint on
+// every cold request, the cached object is immutable, and re-putting it into
+// S3 each time is write amplification with nothing to show for it. The probe
+// itself backfills faster tiers on a partial hit, so the only case that still
+// writes is a full miss.
 func (s *Store) CacheFingerprint(ctx context.Context, h string, fp []byte) {
-	go s.pushFingerprint(ctx, h, fp)
+	go func() {
+		if _, err := s.pullFingerprint(ctx, h, 0); err == nil {
+			return
+		}
+		s.pushFingerprint(ctx, h, fp)
+	}()
 }
 
 // Fingerprint returns the cached content fingerprints for h, deriving them via
