@@ -6,5 +6,6 @@ import (
 
 func configure(app *cli.App) {
 	serveCmd := makeServeCMD()
-	app.Commands = []cli.Command{serveCmd}
+	fingerprintsCmd := makeFingerprintsCMD()
+	app.Commands = []cli.Command{serveCmd, fingerprintsCmd}
 }
