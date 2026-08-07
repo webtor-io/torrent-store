@@ -11,7 +11,7 @@ require (
 	github.com/urfave/cli v1.22.17
 	github.com/webtor-io/abuse-store v0.0.0-20260807084622-80685fa640e9
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
-	github.com/webtor-io/lazymap v0.0.0-20260807105004-cb155eed6b11
+	github.com/webtor-io/lazymap v0.0.0-20260807153732-a258d93d42f4
 	golang.org/x/sys v0.45.0 // indirect
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
@@ -64,7 +64,6 @@ require (
 	github.com/prometheus/common v0.67.2 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/satori/go.uuid v1.2.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/tmthrgd/go-hex v0.0.0-20190904060850-447a3041c3bc // indirect
