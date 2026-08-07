@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/hex"
 	"time"
 
 	"github.com/pkg/errors"
@@ -44,6 +45,35 @@ func NewAbuse(c *cli.Context, cl *AbuseClient) *Abuse {
 			StoreErrors: false,
 		}),
 	}
+}
+
+// CheckFingerprints reports whether any of these content fingerprints belongs
+// to blocked material — that is, whether this payload is blocked under some
+// OTHER infohash we have never been told about.
+//
+// Cached by the fingerprints themselves rather than by infoHash, so every
+// re-upload of one payload shares a single cache entry and a single lookup.
+func (s *Abuse) CheckFingerprints(ctx context.Context, fps [][]byte) (bool, error) {
+	if len(fps) == 0 {
+		return false, nil
+	}
+	key := "fp:"
+	for _, fp := range fps {
+		key += hex.EncodeToString(fp)
+	}
+	return s.LazyMap.Get(key, func() (bool, error) {
+		cl, err := s.cl.Get()
+		if err != nil {
+			return false, err
+		}
+		// Infohash deliberately empty: the caller has already checked it, and
+		// leaving it out keeps this entry shared across every copy.
+		r, err := cl.Check(ctx, &as.CheckRequest{Fingerprints: fps})
+		if err != nil {
+			return false, err
+		}
+		return r.GetExists(), nil
+	})
 }
 
 func (s *Abuse) Get(ctx context.Context, h string) (bool, error) {

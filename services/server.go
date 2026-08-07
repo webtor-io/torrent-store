@@ -94,6 +94,9 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	if err != nil {
 		return nil, err
 	}
+	if err = s.checkPayloadAbuse(ctx, in.GetInfoHash(), hLog, t); err != nil {
+		return nil, err
+	}
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
 	return &pb.PullReply{Torrent: []byte(torrent)}, nil
 }
@@ -239,6 +242,10 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 		return nil, errors.Wrapf(err, "failed to get manifest infoHash=%v", infoHash)
 	}
 
+	if err = s.checkPayloadAbuse(ctx, infoHash, hLog, t); err != nil {
+		return nil, err
+	}
+
 	reply := &pb.FilesReply{}
 	if err = proto.Unmarshal(manifest, reply); err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal manifest")
@@ -288,13 +295,50 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 	reply := &pb.FingerprintReply{}
 	for _, f := range parseFingerprint(blob) {
 		reply.Fingerprints = append(reply.Fingerprints, &pb.FingerprintInfo{
-			Kind:   f.Kind,
 			Value:  f.Value,
 			Length: f.Length,
 		})
 	}
 	hLog.WithField("fingerprints", len(reply.GetFingerprints())).WithField("duration", time.Since(t)).Info("sending fingerprint response")
 	return reply, nil
+}
+
+// checkPayloadAbuse blocks a torrent whose PAYLOAD is blocked, even though its
+// own infoHash has never been reported. Republishing one payload under a new
+// name produces a new infoHash and would otherwise walk straight past the
+// per-infoHash check.
+//
+// Runs after that check, not instead of it: the infoHash arm needs no torrent
+// bytes, so a known-bad hash is refused without ever fetching anything.
+//
+// A failure here is logged and allowed through. The infoHash check is the hard
+// legal gate and has already run; this arm is coverage of re-uploads, and
+// taking the service down when the lookup is flaky would be the worse trade.
+func (s *Server) checkPayloadAbuse(ctx context.Context, h string, hLog *log.Entry, t time.Time) error {
+	if s.a == nil {
+		return nil
+	}
+	blob, err := s.s.Fingerprint(ctx, h, func(torrent []byte) ([]byte, error) {
+		return buildFingerprint(torrent)
+	})
+	if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
+		return nil
+	}
+	digests := fingerprintDigests(blob)
+	if len(digests) == 0 {
+		return nil
+	}
+	blocked, err := s.a.CheckFingerprints(ctx, digests)
+	if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to check payload abuse, skipping")
+		return nil
+	}
+	if blocked {
+		hLog.WithField("duration", time.Since(t)).Warn("payload abused under another infoHash")
+		return status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", h)
+	}
+	return nil
 }
 
 func (s *Server) isAbused(ctx context.Context, h string) (bool, error) {

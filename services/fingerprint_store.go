@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strconv"
 	"strings"
 
@@ -9,7 +11,7 @@ import (
 )
 
 // buildFingerprint derives a torrent's content fingerprints and renders them
-// as the cached blob: one "kind:hex<TAB>length" line per fingerprint.
+// as the cached blob: one "hex<TAB>length" line per fingerprint.
 //
 // Text rather than protobuf on purpose — the blob is a handful of bytes, it is
 // read far more often than it is written, and staying greppable means an
@@ -40,17 +42,38 @@ func parseFingerprint(blob []byte) []fingerprint.Fingerprint {
 			continue
 		}
 		parts := strings.SplitN(line, "\t", 2)
-		kv := strings.SplitN(parts[0], ":", 2)
-		if len(kv) != 2 || kv[0] == "" || kv[1] == "" {
+		value := parts[0]
+		// Blobs written before the scheme label was dropped look like
+		// "v1layout:<hex>". Only one scheme ever existed, so take the digest
+		// and move on. Removable once the caches have rolled.
+		if i := strings.LastIndex(value, ":"); i >= 0 {
+			value = value[i+1:]
+		}
+		if value == "" {
 			continue
 		}
-		f := fingerprint.Fingerprint{Kind: kv[0], Value: kv[1]}
+		f := fingerprint.Fingerprint{Value: value}
 		if len(parts) == 2 {
 			if n, err := strconv.ParseInt(parts[1], 10, 64); err == nil {
 				f.Length = n
 			}
 		}
 		res = append(res, f)
+	}
+	return res
+}
+
+// fingerprintDigests decodes a cached blob into raw digests for the abuse
+// lookup. Undecodable entries are dropped: a corrupt cache line must not be
+// sent as a query that can only ever miss.
+func fingerprintDigests(blob []byte) [][]byte {
+	var res [][]byte
+	for _, f := range parseFingerprint(blob) {
+		d, err := hex.DecodeString(f.Value)
+		if err != nil || len(d) != sha256.Size {
+			continue
+		}
+		res = append(res, d)
 	}
 	return res
 }

@@ -93,12 +93,12 @@ message FingerprintRequest {
   string infoHash = 1;
 }
 
-// One content fingerprint. kind names the scheme ("v1layout" covers the piece
-// geometry and table, "v2file" a BEP 52 per-file merkle root), value is the
-// hex digest, length the number of payload bytes it covers. Match on
-// kind+value; length is for diagnostics.
+// One content fingerprint: value is the hex SHA-256 covering the torrent's
+// piece geometry and piece table, length the payload bytes it covers. Match on
+// value; length is for diagnostics.
 message FingerprintInfo {
-  string kind  = 1;
+  reserved 1;              // was `kind`, dropped while a single scheme exists
+  reserved "kind";
   string value = 2;
   int64 length = 3;
 }

@@ -25,12 +25,12 @@ func TestBuildAndParseFingerprintRoundTrip(t *testing.T) {
 		t.Fatal("round trip produced no fingerprints")
 	}
 	for _, f := range got {
-		if f.Kind == "" || f.Value == "" {
-			t.Fatalf("round trip lost a field: %+v", f)
+		if len(f.Value) != 64 {
+			t.Fatalf("round trip lost the digest: %+v", f)
 		}
 	}
-	if !strings.Contains(string(blob), "v1layout:") {
-		t.Fatalf("blob missing the layout fingerprint: %q", blob)
+	if strings.Contains(string(blob), ":") {
+		t.Fatalf("blob should be bare hex now: %q", blob)
 	}
 }
 
@@ -38,26 +38,28 @@ func TestBuildAndParseFingerprintRoundTrip(t *testing.T) {
 // readers must skip what they cannot parse instead of failing the whole read.
 func TestParseFingerprintToleratesJunk(t *testing.T) {
 	blob := []byte(strings.Join([]string{
-		"v1layout:abc\t123",
+		"abc\t123",
 		"",
-		"garbage-without-colon",
-		":novalue\t1",
-		"nokind:\t1",
-		"v9future:def\t456\textra-column-from-a-newer-writer",
-		"v1layout:nolength",
+		"v1layout:legacy\t456", // blob written before the scheme label was dropped
+		":\t1",                 // no digest at all
+		"def\t789\textra-column-from-a-newer-writer",
+		"nolength",
 	}, "\n"))
 	got := parseFingerprint(blob)
-	if len(got) != 3 {
-		t.Fatalf("parsed %d fingerprints, want 3: %+v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("parsed %d fingerprints, want 4: %+v", len(got), got)
 	}
-	if got[0].Kind != "v1layout" || got[0].Value != "abc" || got[0].Length != 123 {
+	if got[0].Value != "abc" || got[0].Length != 123 {
 		t.Fatalf("first entry wrong: %+v", got[0])
 	}
-	if got[1].Kind != "v9future" {
-		t.Fatalf("unknown kind should still be parsed: %+v", got[1])
+	if got[1].Value != "legacy" {
+		t.Fatalf("legacy scheme prefix should be stripped: %+v", got[1])
 	}
-	if got[2].Length != 0 {
-		t.Fatalf("missing length should default to 0: %+v", got[2])
+	if got[2].Value != "def" {
+		t.Fatalf("extra column should be tolerated: %+v", got[2])
+	}
+	if got[3].Length != 0 {
+		t.Fatalf("missing length should default to 0: %+v", got[3])
 	}
 }
 
@@ -108,7 +110,7 @@ func TestStoreFingerprintBackfillsUpperTier(t *testing.T) {
 	store := NewStore([]StoreProvider{fast, slow})
 
 	const h = "cafebabe"
-	payload := []byte("v1layout:abc\t123\n")
+	payload := []byte("abc\t123\n")
 	_, _ = slow.PushFingerprint(context.Background(), h, payload)
 
 	build := func([]byte) ([]byte, error) {
@@ -148,7 +150,7 @@ func TestServerFingerprintServesAndCaches(t *testing.T) {
 		t.Fatal("no fingerprints returned")
 	}
 	fp := first.GetFingerprints()[0]
-	if fp.GetKind() != "v1layout" || fp.GetValue() == "" || fp.GetLength() == 0 {
+	if fp.GetValue() == "" || fp.GetLength() == 0 {
 		t.Fatalf("malformed fingerprint in reply: %+v", fp)
 	}
 	if len(p.fingerprints[h]) == 0 {
@@ -173,5 +175,26 @@ func TestServerFingerprintUnknownHash(t *testing.T) {
 	_, err := srv.Fingerprint(context.Background(), &pb.FingerprintRequest{InfoHash: "nosuchhash"})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("code = %v (err %v), want NotFound", status.Code(err), err)
+	}
+}
+
+// The abuse lookup takes raw digests. Anything that cannot be one is dropped
+// rather than sent as a query that could only ever miss.
+func TestFingerprintDigestsRejectsUnusable(t *testing.T) {
+	good := strings.Repeat("ab", 32) // 64 hex chars -> 32 bytes
+	blob := []byte(strings.Join([]string{
+		good + "\t1",
+		"nothex!!" + strings.Repeat("0", 56) + "\t1",
+		strings.Repeat("ab", 16) + "\t1", // valid hex, wrong length
+		"v1layout:" + good + "\t1",       // legacy prefix still yields a digest
+	}, "\n"))
+	got := fingerprintDigests(blob)
+	if len(got) != 2 {
+		t.Fatalf("got %d digests, want 2: %x", len(got), got)
+	}
+	for _, d := range got {
+		if len(d) != 32 {
+			t.Fatalf("digest of wrong length survived: %x", d)
+		}
 	}
 }

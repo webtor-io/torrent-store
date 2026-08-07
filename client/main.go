@@ -66,7 +66,7 @@ func printFingerprints(c pb.TorrentStoreClient, infoHash string) error {
 		return err
 	}
 	for _, f := range r.GetFingerprints() {
-		fmt.Printf("%s:%s\t%d\n", f.GetKind(), f.GetValue(), f.GetLength())
+		fmt.Printf("%s\t%d\n", f.GetValue(), f.GetLength())
 	}
 	return nil
 }

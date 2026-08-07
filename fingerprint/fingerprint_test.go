@@ -38,13 +38,10 @@ func layoutOf(t *testing.T, torrent []byte) string {
 	if err != nil {
 		t.Fatalf("Compute: %v", err)
 	}
-	for _, f := range fps {
-		if f.Kind == FingerprintLayout {
-			return f.Value
-		}
+	if len(fps) != 1 {
+		t.Fatalf("expected exactly one fingerprint, got %d", len(fps))
 	}
-	t.Fatal("no layout fingerprint returned")
-	return ""
+	return fps[0].Value
 }
 
 // The case this whole mechanism exists for: one payload republished under many
@@ -158,8 +155,8 @@ func TestFingerprintsRejectsUnusableInput(t *testing.T) {
 }
 
 func TestFingerprintString(t *testing.T) {
-	f := Fingerprint{Kind: FingerprintLayout, Value: "abc123"}
-	if got, want := f.String(), "v1layout:abc123"; got != want {
+	f := Fingerprint{Value: "abc123"}
+	if got, want := f.String(), "abc123"; got != want {
 		t.Fatalf("String() = %q, want %q", got, want)
 	}
 }

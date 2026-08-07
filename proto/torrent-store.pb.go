@@ -593,13 +593,11 @@ func (x *FingerprintRequest) GetInfoHash() string {
 	return ""
 }
 
-// One content fingerprint. kind names the scheme ("v1layout" covers the piece
-// geometry and table, "v2file" a BEP 52 per-file merkle root), value is the
-// hex digest, length the number of payload bytes it covers. Match on
-// kind+value; length is for diagnostics.
+// One content fingerprint: value is the hex SHA-256 covering the torrent's
+// piece geometry and piece table, length the payload bytes it covers. Match on
+// value; length is for diagnostics.
 type FingerprintInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
 	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	Length        int64                  `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -634,13 +632,6 @@ func (x *FingerprintInfo) ProtoReflect() protoreflect.Message {
 // Deprecated: Use FingerprintInfo.ProtoReflect.Descriptor instead.
 func (*FingerprintInfo) Descriptor() ([]byte, []int) {
 	return file_proto_torrent_store_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *FingerprintInfo) GetKind() string {
-	if x != nil {
-		return x.Kind
-	}
-	return ""
 }
 
 func (x *FingerprintInfo) GetValue() string {
@@ -736,11 +727,10 @@ const file_proto_torrent_store_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\x05files\x18\x02 \x03(\v2\t.FileInfoR\x05files\"0\n" +
 	"\x12FingerprintRequest\x12\x1a\n" +
-	"\binfoHash\x18\x01 \x01(\tR\binfoHash\"S\n" +
-	"\x0fFingerprintInfo\x12\x12\n" +
-	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x14\n" +
+	"\binfoHash\x18\x01 \x01(\tR\binfoHash\"K\n" +
+	"\x0fFingerprintInfo\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x16\n" +
-	"\x06length\x18\x03 \x01(\x03R\x06length\"H\n" +
+	"\x06length\x18\x03 \x01(\x03R\x06lengthJ\x04\b\x01\x10\x02R\x04kind\"H\n" +
 	"\x10FingerprintReply\x124\n" +
 	"\ffingerprints\x18\x01 \x03(\v2\x10.FingerprintInfoR\ffingerprints2\xdd\x01\n" +
 	"\fTorrentStore\x12\"\n" +

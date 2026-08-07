@@ -21,7 +21,7 @@ import (
 //
 // One kind is emitted today:
 //
-//   - FingerprintLayout (v1): SHA-256 over the piece geometry and the full
+//   - v1 layout: SHA-256 over the piece geometry and the full
 //     piece-hash table. Piece hashes are computed over the CONCATENATION of
 //     all files, so this identifies the torrent's whole payload-plus-layout.
 //     It matches an exact re-wrap — same files, same order, same sizes, same
@@ -30,9 +30,6 @@ import (
 //     across piece boundaries and changes every subsequent piece hash. For a
 //     single-file torrent there is nothing to shift, so the layout
 //     fingerprint is a true content identity for that file.
-//
-// Kind is carried in the wire format and in storage even though there is only
-// one value, so adding a scheme later is not a breaking change.
 //
 // Deliberately NOT attempted: per-file fingerprints for v1 by hashing the
 // pieces that fall inside a file's byte range. Those pieces are only stable
@@ -52,22 +49,19 @@ import (
 // It also matches at FILE granularity rather than whole-torrent, so a ban
 // propagating through it reaches every torrent containing that file — a wider
 // blast radius than v1layout, and worth deciding on deliberately.
-const FingerprintLayout = "v1layout"
 
 // Fingerprint is one content identity derived from a torrent.
 type Fingerprint struct {
-	// Kind is FingerprintLayout or FingerprintFile.
-	Kind string
 	// Value is the hex digest.
 	Value string
 	// Length is the number of payload bytes this fingerprint covers: the
 	// torrent's total length for a layout fingerprint, the file's length for
-	// a file fingerprint. Carried for diagnostics — matching is on Kind+Value.
+	// a file fingerprint. Carried for diagnostics — matching is on Value alone.
 	Length int64
 }
 
-// String renders a fingerprint in the "kind:hex" form used for storage keys.
-func (f Fingerprint) String() string { return f.Kind + ":" + f.Value }
+// String renders a fingerprint as its hex digest.
+func (f Fingerprint) String() string { return f.Value }
 
 // Compute derives every content identity available from a .torrent.
 //
@@ -93,15 +87,12 @@ func fingerprintsFromInfo(info *metainfo.Info) ([]Fingerprint, error) {
 		}
 		total := info.TotalLength()
 		h := sha256.New()
-		// Domain-separate so a layout digest can never collide with a file
-		// digest, and length-prefix the geometry so it cannot be confused
-		// with the piece table that follows.
-		h.Write([]byte(FingerprintLayout))
+		// Length-prefix the geometry so it cannot be confused with the piece
+		// table that follows.
 		_ = binary.Write(h, binary.BigEndian, info.PieceLength)
 		_ = binary.Write(h, binary.BigEndian, total)
 		h.Write(info.Pieces)
 		res = append(res, Fingerprint{
-			Kind:   FingerprintLayout,
 			Value:  hex.EncodeToString(h.Sum(nil)),
 			Length: total,
 		})
