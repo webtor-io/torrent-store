@@ -32,8 +32,8 @@ func TestCacheFingerprintSkipsWriteWhenAlreadyCached(t *testing.T) {
 
 	const h = "cafe0001"
 	payload := []byte("abc\t1\n")
-	_, _ = fast.PushFingerprint(context.Background(), h, payload)
-	_, _ = durable.PushFingerprint(context.Background(), h, payload)
+	_, _ = fast.PushDerived(context.Background(), DerivedFingerprint, h, payload)
+	_, _ = durable.PushDerived(context.Background(), DerivedFingerprint, h, payload)
 	fast.pushFpCalls, durable.pushFpCalls = 0, 0
 
 	store.CacheFingerprint(context.Background(), h, payload)

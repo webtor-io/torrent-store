@@ -83,46 +83,36 @@ func (s *Redis) Pull(ctx context.Context, h string) (torrent []byte, err error) 
 	return
 }
 
-// manifestKey namespaces derived manifests so they never collide with the
-// raw .torrent stored under the bare infoHash.
-func manifestKey(h string) string {
-	return "m:" + h
+// derivedKey namespaces derived blobs so they never collide with the raw
+// .torrent stored under the bare infoHash. The prefixes are FROZEN: entries
+// written under them are still being read.
+func derivedKey(kind ss.DerivedKind, h string) (string, error) {
+	switch kind {
+	case ss.DerivedManifest:
+		return "m:" + h, nil
+	case ss.DerivedFingerprint:
+		return "fp:" + h, nil
+	}
+	return "", errors.Errorf("no redis key mapping for derived kind %q", kind)
 }
 
-func (s *Redis) PushManifest(ctx context.Context, h string, manifest []byte) (ok bool, err error) {
-	cl := s.cl.Get()
-	if err = cl.Set(ctx, manifestKey(h), manifest, s.exp).Err(); err != nil {
+func (s *Redis) PushDerived(ctx context.Context, kind ss.DerivedKind, h string, blob []byte) (ok bool, err error) {
+	key, err := derivedKey(kind, h)
+	if err != nil {
+		return false, err
+	}
+	if err = s.cl.Get().Set(ctx, key, blob, s.exp).Err(); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (s *Redis) PullManifest(ctx context.Context, h string) (manifest []byte, err error) {
-	cl := s.cl.Get()
-	manifest, err = cl.Get(ctx, manifestKey(h)).Bytes()
-	if errors.Is(err, redis.Nil) {
-		return nil, ss.ErrNotFound
+func (s *Redis) PullDerived(ctx context.Context, kind ss.DerivedKind, h string) (blob []byte, err error) {
+	key, err := derivedKey(kind, h)
+	if err != nil {
+		return nil, err
 	}
-	return
-}
-
-// fingerprintKey namespaces derived fingerprints alongside manifests, so
-// neither collides with the raw .torrent stored under the bare infoHash.
-func fingerprintKey(h string) string {
-	return "fp:" + h
-}
-
-func (s *Redis) PushFingerprint(ctx context.Context, h string, fp []byte) (ok bool, err error) {
-	cl := s.cl.Get()
-	if err = cl.Set(ctx, fingerprintKey(h), fp, s.exp).Err(); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (s *Redis) PullFingerprint(ctx context.Context, h string) (fp []byte, err error) {
-	cl := s.cl.Get()
-	fp, err = cl.Get(ctx, fingerprintKey(h)).Bytes()
+	blob, err = s.cl.Get().Get(ctx, key).Bytes()
 	if errors.Is(err, redis.Nil) {
 		return nil, ss.ErrNotFound
 	}

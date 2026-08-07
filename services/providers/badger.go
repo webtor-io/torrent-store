@@ -156,29 +156,18 @@ func (s *Badger) Pull(_ context.Context, h string) (torrent []byte, err error) {
 	return
 }
 
-// Badger intentionally opts out of manifest caching. The extra read/write
-// volume from manifests on top of the torrent workload tripped a nil-pointer
-// race inside Badger v3's memtable handling under load (a torrent-store pod
-// crashed on 2026-06-14). Manifests are confined to the Redis (fast, shared)
-// and S3 (durable) tiers instead, and rest-api fronts them with its own
-// in-process cache, so dropping the local Badger L1 is barely noticeable.
-func (s *Badger) PushManifest(_ context.Context, _ string, _ []byte) (ok bool, err error) {
+// Badger intentionally opts out of derived-blob caching entirely. The extra
+// read/write volume from manifests on top of the torrent workload tripped a
+// nil-pointer race inside Badger v3's memtable handling under load (a
+// torrent-store pod crashed on 2026-06-14). Derived blobs are confined to the
+// Redis (fast, shared) and S3 (durable) tiers instead, and rest-api fronts
+// manifests with its own in-process cache, so dropping the local Badger L1 is
+// barely noticeable.
+func (s *Badger) PushDerived(_ context.Context, _ ss.DerivedKind, _ string, _ []byte) (ok bool, err error) {
 	return true, nil
 }
 
-func (s *Badger) PullManifest(_ context.Context, _ string) (manifest []byte, err error) {
-	return nil, ss.ErrNotFound
-}
-
-// Badger opts out of fingerprint caching for the same reason it opts out of
-// manifests: extra read/write volume on top of the torrent workload is what
-// tripped the Badger v3 memtable race. Fingerprints live in the Redis and S3
-// tiers instead.
-func (s *Badger) PushFingerprint(_ context.Context, _ string, _ []byte) (ok bool, err error) {
-	return true, nil
-}
-
-func (s *Badger) PullFingerprint(_ context.Context, _ string) (fp []byte, err error) {
+func (s *Badger) PullDerived(_ context.Context, _ ss.DerivedKind, _ string) (blob []byte, err error) {
 	return nil, ss.ErrNotFound
 }
 

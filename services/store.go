@@ -11,20 +11,30 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// DerivedKind names a derived, immutable, rebuildable blob cached alongside
+// the raw .torrent: the file manifest, the content fingerprint. All kinds
+// share one contract — keyed by infoHash, rebuildable from the stored
+// .torrent, safe to lose from any tier — so providers and the Store handle
+// them through one code path. A provider maps a kind onto its own storage
+// key; those key formats are FROZEN, because blobs written under them (S3
+// carries no expiry) are still being read.
+type DerivedKind string
+
+const (
+	DerivedManifest    DerivedKind = "manifest"
+	DerivedFingerprint DerivedKind = "fingerprint"
+)
+
 type StoreProvider interface {
 	Push(ctx context.Context, h string, torrent []byte) (ok bool, err error)
 	Pull(ctx context.Context, h string) (torrent []byte, err error)
 	Touch(ctx context.Context, h string) (ok bool, err error)
-	// PushManifest stores a derived file manifest for the given infoHash.
-	// A provider may no-op if it opts out of manifest caching.
-	PushManifest(ctx context.Context, h string, manifest []byte) (ok bool, err error)
-	// PullManifest returns a previously cached file manifest, or ErrNotFound.
-	PullManifest(ctx context.Context, h string) (manifest []byte, err error)
-	// PushFingerprint stores the derived content fingerprints of a torrent.
-	// A provider may no-op if it opts out, exactly as for manifests.
-	PushFingerprint(ctx context.Context, h string, fp []byte) (ok bool, err error)
-	// PullFingerprint returns previously cached fingerprints, or ErrNotFound.
-	PullFingerprint(ctx context.Context, h string) (fp []byte, err error)
+	// PushDerived stores a derived blob of the given kind for the infoHash.
+	// A provider may no-op if it opts out of derived caching.
+	PushDerived(ctx context.Context, kind DerivedKind, h string, blob []byte) (ok bool, err error)
+	// PullDerived returns a previously cached derived blob, or ErrNotFound —
+	// also when the provider opts out of derived caching entirely.
+	PullDerived(ctx context.Context, kind DerivedKind, h string) (blob []byte, err error)
 	Name() string
 }
 
@@ -32,8 +42,7 @@ type Store struct {
 	pullm        *lazymap.LazyMap[[]byte]
 	pushm        *lazymap.LazyMap[bool]
 	touchm       *lazymap.LazyMap[bool]
-	manifestm    *lazymap.LazyMap[[]byte]
-	fingerprintm *lazymap.LazyMap[[]byte]
+	derivedm     *lazymap.LazyMap[[]byte]
 	providers    []StoreProvider
 	revProviders []StoreProvider
 	ratem        *lazymap.LazyMap[*atomic.Int64]
@@ -56,8 +65,7 @@ func NewStore(providers []StoreProvider) *Store {
 	pullm := lazymap.New[[]byte](cfg)
 	pushm := lazymap.New[bool](cfg)
 	touchm := lazymap.New[bool](cfg)
-	manifestm := lazymap.New[[]byte](cfg)
-	fingerprintm := lazymap.New[[]byte](cfg)
+	derivedm := lazymap.New[[]byte](cfg)
 	ratem := lazymap.New[*atomic.Int64](rateCfg)
 	var revProviders []StoreProvider
 	for _, p := range providers {
@@ -71,8 +79,7 @@ func NewStore(providers []StoreProvider) *Store {
 		pullm:        pullm,
 		pushm:        pushm,
 		touchm:       touchm,
-		manifestm:    manifestm,
-		fingerprintm: fingerprintm,
+		derivedm:     derivedm,
 		ratem:        ratem,
 		providers:    providers,
 		revProviders: revProviders,
@@ -202,24 +209,24 @@ func (s *Store) Touch(ctx context.Context, h string) (bool, error) {
 	})
 }
 
-// pullManifest walks providers from `start`, returning the first cached
-// manifest and backfilling the faster upper tiers on a hit. Mirrors pull,
-// but for derived manifests; a provider that opts out of manifest caching
-// reports ErrNotFound and is transparently skipped.
-func (s *Store) pullManifest(ctx context.Context, h string, start int) (manifest []byte, err error) {
+// pullDerived walks providers from `start`, returning the first cached blob
+// of the kind and backfilling the faster upper tiers on a hit. Mirrors pull,
+// but for derived blobs; a provider that opts out of derived caching reports
+// ErrNotFound and is transparently skipped.
+func (s *Store) pullDerived(ctx context.Context, kind DerivedKind, h string, start int) (blob []byte, err error) {
 	for i := start; i < len(s.providers); i++ {
 		t := time.Now()
-		manifest, err = s.providers[i].PullManifest(ctx, h)
+		blob, err = s.providers[i].PullDerived(ctx, kind, h)
 		if errors.Is(err, ErrNotFound) {
 			continue
 		} else if err != nil {
 			return
 		}
-		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[i].Name()).Info("provider pull manifest")
-		if manifest != nil {
+		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[i].Name()).Info("provider pull " + string(kind))
+		if blob != nil {
 			for j := 0; j < i; j++ {
-				if _, perr := s.providers[j].PushManifest(ctx, h, manifest); perr != nil {
-					log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).WithError(perr).Warn("manifest not backfilled")
+				if _, perr := s.providers[j].PushDerived(ctx, kind, h, blob); perr != nil {
+					log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).WithError(perr).Warn(string(kind) + " not backfilled")
 				}
 			}
 		}
@@ -228,30 +235,37 @@ func (s *Store) pullManifest(ctx context.Context, h string, start int) (manifest
 	return nil, ErrNotFound
 }
 
-// pushManifest writes a manifest to every provider. Failures are non-fatal:
-// a manifest is a rebuildable cache entry, so a partial write just means a
-// future miss on the failed tier.
-func (s *Store) pushManifest(ctx context.Context, h string, manifest []byte) {
+// pushDerived writes a derived blob to every provider. Failures are
+// non-fatal: the blob is rebuildable from the stored .torrent, so a partial
+// write just means a future miss on the failed tier.
+func (s *Store) pushDerived(ctx context.Context, kind DerivedKind, h string, blob []byte) {
 	for _, v := range s.revProviders {
 		t := time.Now()
-		if _, err := v.PushManifest(ctx, h, manifest); err != nil {
-			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).WithError(err).Warn("provider not pushed manifest")
+		if _, err := v.PushDerived(ctx, kind, h, blob); err != nil {
+			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).WithError(err).Warn("provider not pushed " + string(kind))
 			continue
 		}
-		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider push manifest")
+		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider push " + string(kind))
 	}
 }
 
-// Manifest returns the cached file manifest for h, building it via build()
-// from the stored .torrent on a cache miss and persisting it across tiers.
-// The whole get-or-build is singleflighted per infoHash so a cold burst on
-// the same torrent triggers at most one Pull+parse. Manifests are immutable
-// per infoHash, so no invalidation is needed.
-func (s *Store) Manifest(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
-	return s.manifestm.Get(h, func() ([]byte, error) {
-		manifest, err := s.pullManifest(ctx, h, 0)
+// getOrBuildDerived returns the cached blob of the kind, building it via
+// build() from the stored .torrent on a miss and persisting it across tiers.
+// The whole get-or-build is singleflighted per (kind, infoHash) so a cold
+// burst on the same torrent triggers at most one Pull+parse. Derived blobs
+// are immutable per infoHash, so no invalidation is needed.
+//
+// persistAsync moves the tier writes off the request path, with
+// context.WithoutCancel so a client disconnecting mid-request does not abort
+// a write that is no longer on its behalf. The caller does not need the write
+// to answer — the value is already in hand and the in-process map holds it —
+// and a lost write only costs a re-derive later, which is what a failed write
+// already costs.
+func (s *Store) getOrBuildDerived(ctx context.Context, kind DerivedKind, h string, build func(torrent []byte) ([]byte, error), persistAsync bool) ([]byte, error) {
+	return s.derivedm.Get(string(kind)+":"+h, func() ([]byte, error) {
+		blob, err := s.pullDerived(ctx, kind, h, 0)
 		if err == nil {
-			return manifest, nil
+			return blob, nil
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return nil, err
@@ -260,63 +274,41 @@ func (s *Store) Manifest(ctx context.Context, h string, build func(torrent []byt
 		if err != nil {
 			return nil, err
 		}
-		manifest, err = build(torrent)
+		blob, err = build(torrent)
 		if err != nil {
 			return nil, err
 		}
-		s.pushManifest(ctx, h, manifest)
-		return manifest, nil
+		if persistAsync {
+			go s.pushDerived(context.WithoutCancel(ctx), kind, h, blob)
+		} else {
+			s.pushDerived(ctx, kind, h, blob)
+		}
+		return blob, nil
 	})
 }
 
-// pullFingerprint walks providers from `start`, returning the first cached
-// fingerprint blob and backfilling the faster upper tiers on a hit. Mirrors
-// pullManifest.
-func (s *Store) pullFingerprint(ctx context.Context, h string, start int) (fp []byte, err error) {
-	for i := start; i < len(s.providers); i++ {
-		t := time.Now()
-		fp, err = s.providers[i].PullFingerprint(ctx, h)
-		if errors.Is(err, ErrNotFound) {
-			continue
-		} else if err != nil {
-			return
-		}
-		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", s.providers[i].Name()).Info("provider pull fingerprint")
-		if fp != nil {
-			for j := 0; j < i; j++ {
-				if _, perr := s.providers[j].PushFingerprint(ctx, h, fp); perr != nil {
-					log.WithField("infohash", h).WithField("provider", s.providers[j].Name()).WithError(perr).Warn("fingerprint not backfilled")
-				}
-			}
-		}
-		return
-	}
-	return nil, ErrNotFound
+// Manifest returns the cached file manifest for h. Persisted synchronously —
+// moving it off the request path is a measurable behaviour change for Files
+// and gets decided on its own numbers, not inherited from fingerprints.
+func (s *Store) Manifest(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
+	return s.getOrBuildDerived(ctx, DerivedManifest, h, build, false)
 }
 
-// pushFingerprint writes a fingerprint blob to every provider. Failures are
-// non-fatal: like a manifest it is rebuildable from the stored .torrent, so a
-// partial write only costs a future miss on that tier.
-func (s *Store) pushFingerprint(ctx context.Context, h string, fp []byte) {
-	for _, v := range s.revProviders {
-		t := time.Now()
-		if _, err := v.PushFingerprint(ctx, h, fp); err != nil {
-			log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).WithError(err).Warn("provider not pushed fingerprint")
-			continue
-		}
-		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider push fingerprint")
-	}
+// Fingerprint returns the cached content fingerprints for h.
+//
+// Worth caching even though the value is tiny: deriving it needs the whole
+// .torrent, whose piece table dominates its size, so a cache hit avoids both
+// pulling those bytes and parsing them. Persisted asynchronously — the S3
+// write alone costs ~50ms at the median, two orders more than the Redis one.
+func (s *Store) Fingerprint(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
+	return s.getOrBuildDerived(ctx, DerivedFingerprint, h, build, true)
 }
 
 // CachedFingerprint returns an already-derived fingerprint, or ErrNotFound.
 // It reads the cache tiers only — it never pulls or parses a .torrent — so it
 // is safe on a request that would otherwise be a single cache read.
-//
-// The in-process map is deliberately bypassed: lazymap.Status reads its map
-// without holding the lock (confirmed under -race), so probing for a warm
-// entry would introduce a data race to save a sub-millisecond Redis GET.
 func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error) {
-	return s.pullFingerprint(ctx, h, 0)
+	return s.pullDerived(ctx, DerivedFingerprint, h, 0)
 }
 
 // CacheFingerprint makes sure an already-derived fingerprint is cached,
@@ -331,47 +323,9 @@ func (s *Store) CachedFingerprint(ctx context.Context, h string) ([]byte, error)
 // writes is a full miss.
 func (s *Store) CacheFingerprint(ctx context.Context, h string, fp []byte) {
 	go func() {
-		if _, err := s.pullFingerprint(ctx, h, 0); err == nil {
+		if _, err := s.pullDerived(ctx, DerivedFingerprint, h, 0); err == nil {
 			return
 		}
-		s.pushFingerprint(ctx, h, fp)
+		s.pushDerived(ctx, DerivedFingerprint, h, fp)
 	}()
-}
-
-// Fingerprint returns the cached content fingerprints for h, deriving them via
-// build() from the stored .torrent on a miss and persisting them across tiers.
-// Singleflighted per infoHash, and immutable per infoHash like a manifest, so
-// no invalidation is needed.
-//
-// Worth caching even though the value is tiny: deriving it needs the whole
-// .torrent, whose piece table dominates its size, so a cache hit avoids both
-// pulling those bytes and parsing them.
-func (s *Store) Fingerprint(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
-	return s.fingerprintm.Get(h, func() ([]byte, error) {
-		fp, err := s.pullFingerprint(ctx, h, 0)
-		if err == nil {
-			return fp, nil
-		}
-		if !errors.Is(err, ErrNotFound) {
-			return nil, err
-		}
-		torrent, err := s.Pull(ctx, h)
-		if err != nil {
-			return nil, err
-		}
-		fp, err = build(torrent)
-		if err != nil {
-			return nil, err
-		}
-		// Persist off the request path. The S3 write alone costs ~50ms at the
-		// median — two orders more than the Redis one — and the caller does
-		// not need it to answer: the value is already in hand, the in-process
-		// map holds it, and a lost write only costs a re-derive later, which
-		// is what a failed write already costs.
-		//
-		// context.WithoutCancel so a client disconnecting mid-request does not
-		// abort a write that is no longer on its behalf.
-		go s.pushFingerprint(context.WithoutCancel(ctx), h, fp)
-		return fp, nil
-	})
 }

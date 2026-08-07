@@ -65,28 +65,28 @@ func TestBuildManifest(t *testing.T) {
 }
 
 // fakeProvider is an in-memory StoreProvider for exercising the multi-level
-// manifest cache logic. supportsMani=false mimics a tier that opts out of
-// manifest caching (PushManifest no-ops, PullManifest always misses).
+// derived-blob cache logic. supportsDerived=false mimics a tier that opts out
+// of derived caching (PushDerived no-ops, PullDerived always misses).
 type fakeProvider struct {
-	name          string
-	supportsMani  bool
-	mu            sync.Mutex
-	torrents      map[string][]byte
-	manifests     map[string][]byte
-	pullManiCalls int
-	pushManiCalls int
-	fingerprints  map[string][]byte
-	pullFpCalls   int
-	pushFpCalls   int
+	name            string
+	supportsDerived bool
+	mu              sync.Mutex
+	torrents        map[string][]byte
+	manifests       map[string][]byte
+	pullManiCalls   int
+	pushManiCalls   int
+	fingerprints    map[string][]byte
+	pullFpCalls     int
+	pushFpCalls     int
 }
 
-func newFakeProvider(name string, supportsMani bool) *fakeProvider {
+func newFakeProvider(name string, supportsDerived bool) *fakeProvider {
 	return &fakeProvider{
-		name:         name,
-		supportsMani: supportsMani,
-		torrents:     map[string][]byte{},
-		manifests:    map[string][]byte{},
-		fingerprints: map[string][]byte{},
+		name:            name,
+		supportsDerived: supportsDerived,
+		torrents:        map[string][]byte{},
+		manifests:       map[string][]byte{},
+		fingerprints:    map[string][]byte{},
 	}
 }
 
@@ -118,52 +118,40 @@ func (f *fakeProvider) Touch(_ context.Context, h string) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeProvider) PushManifest(_ context.Context, h string, manifest []byte) (bool, error) {
+func (f *fakeProvider) PushDerived(_ context.Context, kind DerivedKind, h string, blob []byte) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.pushManiCalls++
-	if !f.supportsMani {
-		return true, nil // S3-like no-op
+	switch kind {
+	case DerivedManifest:
+		f.pushManiCalls++
+		if f.supportsDerived {
+			f.manifests[h] = blob
+		}
+	case DerivedFingerprint:
+		f.pushFpCalls++
+		if f.supportsDerived {
+			f.fingerprints[h] = blob
+		}
 	}
-	f.manifests[h] = manifest
-	return true, nil
+	return true, nil // opted-out tiers no-op, S3-like
 }
 
-// Fingerprints reuse supportsMani: a tier that opts out of one derived
-// artifact opts out of the other, which is how the real providers behave.
-func (f *fakeProvider) PushFingerprint(_ context.Context, h string, fp []byte) (bool, error) {
+func (f *fakeProvider) PullDerived(_ context.Context, kind DerivedKind, h string) ([]byte, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.pushFpCalls++
-	if !f.supportsMani {
-		return true, nil
+	var m map[string][]byte
+	switch kind {
+	case DerivedManifest:
+		f.pullManiCalls++
+		m = f.manifests
+	case DerivedFingerprint:
+		f.pullFpCalls++
+		m = f.fingerprints
 	}
-	f.fingerprints[h] = fp
-	return true, nil
-}
-
-func (f *fakeProvider) PullFingerprint(_ context.Context, h string) ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.pullFpCalls++
-	if !f.supportsMani {
+	if !f.supportsDerived || m == nil {
 		return nil, ErrNotFound
 	}
-	v, ok := f.fingerprints[h]
-	if !ok {
-		return nil, ErrNotFound
-	}
-	return v, nil
-}
-
-func (f *fakeProvider) PullManifest(_ context.Context, h string) ([]byte, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.pullManiCalls++
-	if !f.supportsMani {
-		return nil, ErrNotFound
-	}
-	v, ok := f.manifests[h]
+	v, ok := m[h]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -220,9 +208,9 @@ func TestStorePullManifestBackfillsUpperTier(t *testing.T) {
 
 	const h = "abc123"
 	// Seed only the slow tier.
-	_, _ = slow.PushManifest(context.Background(), h, []byte("payload"))
+	_, _ = slow.PushDerived(context.Background(), DerivedManifest, h, []byte("payload"))
 
-	out, err := store.pullManifest(context.Background(), h, 0)
+	out, err := store.pullDerived(context.Background(), DerivedManifest, h, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +230,7 @@ func TestStoreManifestServesFromCacheWithoutBuild(t *testing.T) {
 	const h = "cached1"
 	reply := &pb.FilesReply{Name: "pre"}
 	payload, _ := proto.Marshal(reply)
-	_, _ = fast.PushManifest(context.Background(), h, payload)
+	_, _ = fast.PushDerived(context.Background(), DerivedManifest, h, payload)
 
 	var builds int
 	out, err := store.Manifest(context.Background(), h, func(_ []byte) ([]byte, error) {

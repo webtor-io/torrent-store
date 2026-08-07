@@ -122,7 +122,7 @@ func TestStoreFingerprintBackfillsUpperTier(t *testing.T) {
 
 	const h = "cafebabe"
 	payload := []byte("abc\t123\n")
-	_, _ = slow.PushFingerprint(context.Background(), h, payload)
+	_, _ = slow.PushDerived(context.Background(), DerivedFingerprint, h, payload)
 
 	build := func([]byte) ([]byte, error) {
 		t.Fatal("build must not run when a lower tier already has the value")

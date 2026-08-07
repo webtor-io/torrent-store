@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/pkg/errors"
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
 	ss "github.com/webtor-io/torrent-store/services"
@@ -111,22 +112,33 @@ func (s *S3) Pull(ctx context.Context, h string) (torrent []byte, err error) {
 	return io.ReadAll(r.Body)
 }
 
-// s3ManifestKey namespaces derived manifests with a .manifest suffix so they
-// sit next to the raw .torrent object (stored under the bare infoHash) without
-// colliding. Manifests are immutable and rebuildable, so they live without an
-// expiry — the durable bottom tier that survives Badger/Redis eviction.
-func s3ManifestKey(h string) string {
-	return h + ".manifest"
+// s3DerivedKey namespaces derived blobs with a per-kind suffix so they sit
+// next to the raw .torrent object (stored under the bare infoHash) without
+// colliding. Derived blobs are immutable and rebuildable, so they live
+// without an expiry — the durable bottom tier that survives Badger/Redis
+// eviction. The suffixes are FROZEN: objects written under them are still
+// being read.
+func s3DerivedKey(kind ss.DerivedKind, h string) (string, error) {
+	switch kind {
+	case ss.DerivedManifest:
+		return h + ".manifest", nil
+	case ss.DerivedFingerprint:
+		return h + ".fingerprint", nil
+	}
+	return "", errors.Errorf("no s3 key mapping for derived kind %q", kind)
 }
 
-func (s *S3) PushManifest(ctx context.Context, h string, manifest []byte) (ok bool, err error) {
-	cl := s.cl.Get()
-	_, err = cl.PutObjectWithContext(ctx,
+func (s *S3) PushDerived(ctx context.Context, kind ss.DerivedKind, h string, blob []byte) (ok bool, err error) {
+	key, err := s3DerivedKey(kind, h)
+	if err != nil {
+		return false, err
+	}
+	_, err = s.cl.Get().PutObjectWithContext(ctx,
 		&s3.PutObjectInput{
 			Bucket:     aws.String(s.bucket),
-			Key:        aws.String(s3ManifestKey(h)),
-			Body:       bytes.NewReader(manifest),
-			ContentMD5: s.makeAWSMD5(manifest),
+			Key:        aws.String(key),
+			Body:       bytes.NewReader(blob),
+			ContentMD5: s.makeAWSMD5(blob),
 		})
 	if err != nil {
 		return false, err
@@ -134,50 +146,14 @@ func (s *S3) PushManifest(ctx context.Context, h string, manifest []byte) (ok bo
 	return true, nil
 }
 
-func (s *S3) PullManifest(ctx context.Context, h string) (manifest []byte, err error) {
-	cl := s.cl.Get()
-	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(s3ManifestKey(h)),
-	})
+func (s *S3) PullDerived(ctx context.Context, kind ss.DerivedKind, h string) (blob []byte, err error) {
+	key, err := s3DerivedKey(kind, h)
 	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
-			return nil, ss.ErrNotFound
-		}
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(r.Body)
-	return io.ReadAll(r.Body)
-}
-
-// s3FingerprintKey mirrors s3ManifestKey: derived, immutable, rebuildable,
-// and kept without expiry as the durable tier.
-func s3FingerprintKey(h string) string {
-	return h + ".fingerprint"
-}
-
-func (s *S3) PushFingerprint(ctx context.Context, h string, fp []byte) (ok bool, err error) {
-	cl := s.cl.Get()
-	_, err = cl.PutObjectWithContext(ctx,
-		&s3.PutObjectInput{
-			Bucket:     aws.String(s.bucket),
-			Key:        aws.String(s3FingerprintKey(h)),
-			Body:       bytes.NewReader(fp),
-			ContentMD5: s.makeAWSMD5(fp),
-		})
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (s *S3) PullFingerprint(ctx context.Context, h string) (fp []byte, err error) {
-	cl := s.cl.Get()
-	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
+	r, err := s.cl.Get().GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
-		Key:    aws.String(s3FingerprintKey(h)),
+		Key:    aws.String(key),
 	})
 	if err != nil {
 		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
