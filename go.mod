@@ -9,7 +9,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.17
-	github.com/webtor-io/abuse-store v0.0.0-20260807073929-f4d3301ddbe3
+	github.com/webtor-io/abuse-store v0.0.0-20260807084622-80685fa640e9
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
 	github.com/webtor-io/lazymap v0.0.0-20250308124910-3a61e0f78108
 	golang.org/x/sys v0.45.0 // indirect

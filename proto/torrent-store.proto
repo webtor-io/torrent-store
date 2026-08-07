@@ -93,17 +93,13 @@ message FingerprintRequest {
   string infoHash = 1;
 }
 
-// One content fingerprint: value is the hex SHA-256 covering the torrent's
-// piece geometry and piece table, length the payload bytes it covers. Match on
-// value; length is for diagnostics.
-message FingerprintInfo {
-  reserved 1;              // was `kind`, dropped while a single scheme exists
-  reserved "kind";
+// The fingerprint response. value is the hex SHA-256 covering the torrent's
+// piece geometry and piece table; length is the payload bytes it covers, for
+// diagnostics only. Exactly one per torrent, so no repetition and no wrapper
+// message.
+message FingerprintReply {
+  reserved 1;              // was `repeated FingerprintInfo fingerprints`
+  reserved "fingerprints";
   string value = 2;
   int64 length = 3;
-}
-
-// The fingerprint response message
-message FingerprintReply {
-  repeated FingerprintInfo fingerprints = 1;
 }

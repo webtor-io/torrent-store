@@ -44,21 +44,36 @@ func ParseDefaultTrackers(c *cli.Context) []string {
 	return out
 }
 
+// abuseChecker is the blocking oracle. An interface so the decision can be
+// exercised in tests without standing up a gRPC client; *Abuse is the only
+// production implementation.
+type abuseChecker interface {
+	Get(ctx context.Context, h string) (bool, error)
+	CheckFingerprint(ctx context.Context, fp []byte) (bool, error)
+}
+
 type Server struct {
 	pb.UnimplementedTorrentStoreServer
 	s               *Store
-	a               *Abuse
+	a               abuseChecker
 	sl              *Stoplist
 	defaultTrackers []string
 }
 
 func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Server {
-	return &Server{
+	srv := &Server{
 		s:               s,
-		a:               a,
 		sl:              sl,
 		defaultTrackers: defaultTrackers,
 	}
+	// Assign only when non-nil. NewAbuse returns a nil *Abuse when abuse
+	// checking is off, and storing that straight into an interface would give
+	// a non-nil interface holding a nil pointer — every `s.a == nil` guard
+	// would then pass and the first call would dereference nil.
+	if a != nil {
+		srv.a = a
+	}
+	return srv
 }
 
 func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, error) {
@@ -160,6 +175,10 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	if abused {
 		hLog.WithField("duration", time.Since(t)).Warn("abused")
 		return nil, status.Errorf(codes.PermissionDenied, "restricted by the rightholder infoHash=%v", infoHash)
+	}
+
+	if err = s.checkPayloadAbuseBytes(ctx, infoHash, in.GetTorrent(), hLog, t); err != nil {
+		return nil, err
 	}
 
 	info, err := mi.UnmarshalInfo()
@@ -292,14 +311,13 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 		return nil, errors.Wrapf(err, "failed to get fingerprint infoHash=%v", infoHash)
 	}
 
-	reply := &pb.FingerprintReply{}
-	for _, f := range parseFingerprint(blob) {
-		reply.Fingerprints = append(reply.Fingerprints, &pb.FingerprintInfo{
-			Value:  f.Value,
-			Length: f.Length,
-		})
+	fps := parseFingerprint(blob)
+	if len(fps) == 0 {
+		hLog.WithField("duration", time.Since(t)).Error("cached fingerprint blob is unreadable")
+		return nil, errors.Errorf("unreadable fingerprint infoHash=%v", infoHash)
 	}
-	hLog.WithField("fingerprints", len(reply.GetFingerprints())).WithField("duration", time.Since(t)).Info("sending fingerprint response")
+	reply := &pb.FingerprintReply{Value: fps[0].Value, Length: fps[0].Length}
+	hLog.WithField("fingerprint", reply.GetValue()).WithField("duration", time.Since(t)).Info("sending fingerprint response")
 	return reply, nil
 }
 
@@ -325,11 +343,30 @@ func (s *Server) checkPayloadAbuse(ctx context.Context, h string, hLog *log.Entr
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
 		return nil
 	}
-	digests := fingerprintDigests(blob)
-	if len(digests) == 0 {
+	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)
+}
+
+// checkPayloadAbuseBytes is the Push-side variant: the torrent is in hand, so
+// the fingerprint is derived directly instead of through the store. Refusing
+// here keeps a payload that is already blocked from being stored at all,
+// rather than storing it and refusing on every later read.
+func (s *Server) checkPayloadAbuseBytes(ctx context.Context, h string, torrent []byte, hLog *log.Entry, t time.Time) error {
+	if s.a == nil {
 		return nil
 	}
-	blocked, err := s.a.CheckFingerprints(ctx, digests)
+	blob, err := buildFingerprint(torrent)
+	if err != nil {
+		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to derive fingerprint, skipping payload check")
+		return nil
+	}
+	return s.checkPayloadDigest(ctx, h, fingerprintDigest(blob), hLog, t)
+}
+
+func (s *Server) checkPayloadDigest(ctx context.Context, h string, digest []byte, hLog *log.Entry, t time.Time) error {
+	if len(digest) == 0 {
+		return nil
+	}
+	blocked, err := s.a.CheckFingerprint(ctx, digest)
 	if err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to check payload abuse, skipping")
 		return nil

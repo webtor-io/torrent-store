@@ -593,10 +593,11 @@ func (x *FingerprintRequest) GetInfoHash() string {
 	return ""
 }
 
-// One content fingerprint: value is the hex SHA-256 covering the torrent's
-// piece geometry and piece table, length the payload bytes it covers. Match on
-// value; length is for diagnostics.
-type FingerprintInfo struct {
+// The fingerprint response. value is the hex SHA-256 covering the torrent's
+// piece geometry and piece table; length is the payload bytes it covers, for
+// diagnostics only. Exactly one per torrent, so no repetition and no wrapper
+// message.
+type FingerprintReply struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	Length        int64                  `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`
@@ -604,61 +605,9 @@ type FingerprintInfo struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *FingerprintInfo) Reset() {
-	*x = FingerprintInfo{}
-	mi := &file_proto_torrent_store_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FingerprintInfo) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FingerprintInfo) ProtoMessage() {}
-
-func (x *FingerprintInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FingerprintInfo.ProtoReflect.Descriptor instead.
-func (*FingerprintInfo) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *FingerprintInfo) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
-func (x *FingerprintInfo) GetLength() int64 {
-	if x != nil {
-		return x.Length
-	}
-	return 0
-}
-
-// The fingerprint response message
-type FingerprintReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Fingerprints  []*FingerprintInfo     `protobuf:"bytes,1,rep,name=fingerprints,proto3" json:"fingerprints,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
 func (x *FingerprintReply) Reset() {
 	*x = FingerprintReply{}
-	mi := &file_proto_torrent_store_proto_msgTypes[13]
+	mi := &file_proto_torrent_store_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -670,7 +619,7 @@ func (x *FingerprintReply) String() string {
 func (*FingerprintReply) ProtoMessage() {}
 
 func (x *FingerprintReply) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[13]
+	mi := &file_proto_torrent_store_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -683,14 +632,21 @@ func (x *FingerprintReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FingerprintReply.ProtoReflect.Descriptor instead.
 func (*FingerprintReply) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{13}
+	return file_proto_torrent_store_proto_rawDescGZIP(), []int{12}
 }
 
-func (x *FingerprintReply) GetFingerprints() []*FingerprintInfo {
+func (x *FingerprintReply) GetValue() string {
 	if x != nil {
-		return x.Fingerprints
+		return x.Value
 	}
-	return nil
+	return ""
+}
+
+func (x *FingerprintReply) GetLength() int64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
 }
 
 var File_proto_torrent_store_proto protoreflect.FileDescriptor
@@ -727,12 +683,10 @@ const file_proto_torrent_store_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1f\n" +
 	"\x05files\x18\x02 \x03(\v2\t.FileInfoR\x05files\"0\n" +
 	"\x12FingerprintRequest\x12\x1a\n" +
-	"\binfoHash\x18\x01 \x01(\tR\binfoHash\"K\n" +
-	"\x0fFingerprintInfo\x12\x14\n" +
+	"\binfoHash\x18\x01 \x01(\tR\binfoHash\"T\n" +
+	"\x10FingerprintReply\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x16\n" +
-	"\x06length\x18\x03 \x01(\x03R\x06lengthJ\x04\b\x01\x10\x02R\x04kind\"H\n" +
-	"\x10FingerprintReply\x124\n" +
-	"\ffingerprints\x18\x01 \x03(\v2\x10.FingerprintInfoR\ffingerprints2\xdd\x01\n" +
+	"\x06length\x18\x03 \x01(\x03R\x06lengthJ\x04\b\x01\x10\x02R\ffingerprints2\xdd\x01\n" +
 	"\fTorrentStore\x12\"\n" +
 	"\x04Push\x12\f.PushRequest\x1a\n" +
 	".PushReply\"\x00\x12\"\n" +
@@ -754,7 +708,7 @@ func file_proto_torrent_store_proto_rawDescGZIP() []byte {
 	return file_proto_torrent_store_proto_rawDescData
 }
 
-var file_proto_torrent_store_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_proto_torrent_store_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_proto_torrent_store_proto_goTypes = []any{
 	(*PushReply)(nil),          // 0: PushReply
 	(*PushRequest)(nil),        // 1: PushRequest
@@ -768,27 +722,25 @@ var file_proto_torrent_store_proto_goTypes = []any{
 	(*FileInfo)(nil),           // 9: FileInfo
 	(*FilesReply)(nil),         // 10: FilesReply
 	(*FingerprintRequest)(nil), // 11: FingerprintRequest
-	(*FingerprintInfo)(nil),    // 12: FingerprintInfo
-	(*FingerprintReply)(nil),   // 13: FingerprintReply
+	(*FingerprintReply)(nil),   // 12: FingerprintReply
 }
 var file_proto_torrent_store_proto_depIdxs = []int32{
 	9,  // 0: FilesReply.files:type_name -> FileInfo
-	12, // 1: FingerprintReply.fingerprints:type_name -> FingerprintInfo
-	1,  // 2: TorrentStore.Push:input_type -> PushRequest
-	2,  // 3: TorrentStore.Pull:input_type -> PullRequest
-	7,  // 4: TorrentStore.Touch:input_type -> TouchRequest
-	8,  // 5: TorrentStore.Files:input_type -> FilesRequest
-	11, // 6: TorrentStore.Fingerprint:input_type -> FingerprintRequest
-	0,  // 7: TorrentStore.Push:output_type -> PushReply
-	3,  // 8: TorrentStore.Pull:output_type -> PullReply
-	6,  // 9: TorrentStore.Touch:output_type -> TouchReply
-	10, // 10: TorrentStore.Files:output_type -> FilesReply
-	13, // 11: TorrentStore.Fingerprint:output_type -> FingerprintReply
-	7,  // [7:12] is the sub-list for method output_type
-	2,  // [2:7] is the sub-list for method input_type
-	2,  // [2:2] is the sub-list for extension type_name
-	2,  // [2:2] is the sub-list for extension extendee
-	0,  // [0:2] is the sub-list for field type_name
+	1,  // 1: TorrentStore.Push:input_type -> PushRequest
+	2,  // 2: TorrentStore.Pull:input_type -> PullRequest
+	7,  // 3: TorrentStore.Touch:input_type -> TouchRequest
+	8,  // 4: TorrentStore.Files:input_type -> FilesRequest
+	11, // 5: TorrentStore.Fingerprint:input_type -> FingerprintRequest
+	0,  // 6: TorrentStore.Push:output_type -> PushReply
+	3,  // 7: TorrentStore.Pull:output_type -> PullReply
+	6,  // 8: TorrentStore.Touch:output_type -> TouchReply
+	10, // 9: TorrentStore.Files:output_type -> FilesReply
+	12, // 10: TorrentStore.Fingerprint:output_type -> FingerprintReply
+	6,  // [6:11] is the sub-list for method output_type
+	1,  // [1:6] is the sub-list for method input_type
+	1,  // [1:1] is the sub-list for extension type_name
+	1,  // [1:1] is the sub-list for extension extendee
+	0,  // [0:1] is the sub-list for field type_name
 }
 
 func init() { file_proto_torrent_store_proto_init() }
@@ -802,7 +754,7 @@ func file_proto_torrent_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_torrent_store_proto_rawDesc), len(file_proto_torrent_store_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

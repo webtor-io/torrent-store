@@ -63,17 +63,16 @@ func parseFingerprint(blob []byte) []fingerprint.Fingerprint {
 	return res
 }
 
-// fingerprintDigests decodes a cached blob into raw digests for the abuse
-// lookup. Undecodable entries are dropped: a corrupt cache line must not be
-// sent as a query that can only ever miss.
-func fingerprintDigests(blob []byte) [][]byte {
-	var res [][]byte
+// fingerprintDigest decodes a cached blob into the raw digest for the abuse
+// lookup, or nil if there is not exactly one usable entry. A corrupt cache
+// line must not be sent as a query that can only ever miss.
+func fingerprintDigest(blob []byte) []byte {
 	for _, f := range parseFingerprint(blob) {
 		d, err := hex.DecodeString(f.Value)
 		if err != nil || len(d) != sha256.Size {
 			continue
 		}
-		res = append(res, d)
+		return d
 	}
-	return res
+	return nil
 }

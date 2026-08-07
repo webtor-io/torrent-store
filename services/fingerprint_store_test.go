@@ -3,6 +3,8 @@ package services
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 
@@ -146,12 +148,8 @@ func TestServerFingerprintServesAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fingerprint: %v", err)
 	}
-	if len(first.GetFingerprints()) == 0 {
-		t.Fatal("no fingerprints returned")
-	}
-	fp := first.GetFingerprints()[0]
-	if fp.GetValue() == "" || fp.GetLength() == 0 {
-		t.Fatalf("malformed fingerprint in reply: %+v", fp)
+	if first.GetValue() == "" || first.GetLength() == 0 {
+		t.Fatalf("malformed fingerprint in reply: %+v", first)
 	}
 	if len(p.fingerprints[h]) == 0 {
 		t.Fatal("derived fingerprint was not cached")
@@ -164,9 +162,8 @@ func TestServerFingerprintServesAndCaches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second fingerprint: %v", err)
 	}
-	if len(second.GetFingerprints()) != len(first.GetFingerprints()) ||
-		second.GetFingerprints()[0].GetValue() != fp.GetValue() {
-		t.Fatalf("cached reply differs: %+v vs %+v", second.GetFingerprints(), first.GetFingerprints())
+	if second.GetValue() != first.GetValue() || second.GetLength() != first.GetLength() {
+		t.Fatalf("cached reply differs: %+v vs %+v", second, first)
 	}
 }
 
@@ -178,23 +175,131 @@ func TestServerFingerprintUnknownHash(t *testing.T) {
 	}
 }
 
-// The abuse lookup takes raw digests. Anything that cannot be one is dropped
-// rather than sent as a query that could only ever miss.
-func TestFingerprintDigestsRejectsUnusable(t *testing.T) {
+// The abuse lookup takes a raw digest. Anything that cannot be one yields nil
+// rather than a query that could only ever miss.
+func TestFingerprintDigestRejectsUnusable(t *testing.T) {
 	good := strings.Repeat("ab", 32) // 64 hex chars -> 32 bytes
-	blob := []byte(strings.Join([]string{
-		good + "\t1",
-		"nothex!!" + strings.Repeat("0", 56) + "\t1",
-		strings.Repeat("ab", 16) + "\t1", // valid hex, wrong length
-		"v1layout:" + good + "\t1",       // legacy prefix still yields a digest
-	}, "\n"))
-	got := fingerprintDigests(blob)
-	if len(got) != 2 {
-		t.Fatalf("got %d digests, want 2: %x", len(got), got)
-	}
-	for _, d := range got {
-		if len(d) != 32 {
-			t.Fatalf("digest of wrong length survived: %x", d)
+	for name, blob := range map[string]string{
+		"not hex":     "nothex!!" + strings.Repeat("0", 56) + "\t1",
+		"wrong width": strings.Repeat("ab", 16) + "\t1",
+		"empty":       "",
+	} {
+		if d := fingerprintDigest([]byte(blob)); d != nil {
+			t.Fatalf("%s: expected nil, got %x", name, d)
 		}
+	}
+	if d := fingerprintDigest([]byte(good + "\t1")); len(d) != 32 {
+		t.Fatalf("a usable digest was rejected: %x", d)
+	}
+	// A blob written before the scheme label was dropped still yields one.
+	if d := fingerprintDigest([]byte("v1layout:" + good + "\t1")); len(d) != 32 {
+		t.Fatalf("legacy blob rejected: %x", d)
+	}
+}
+
+// fakeAbuse is a scripted blocking oracle.
+type fakeAbuse struct {
+	byHash    map[string]bool
+	byDigest  map[string]bool
+	err       error
+	fpQueries int
+}
+
+func (f *fakeAbuse) Get(_ context.Context, h string) (bool, error) { return f.byHash[h], nil }
+
+func (f *fakeAbuse) CheckFingerprint(_ context.Context, fp []byte) (bool, error) {
+	f.fpQueries++
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.byDigest[hex.EncodeToString(fp)], nil
+}
+
+// serverWithTorrent stores a torrent and returns a server wired to the oracle.
+func serverWithTorrent(t *testing.T, a abuseChecker) (*Server, string, []byte) {
+	t.Helper()
+	p := newFakeProvider("mem", true)
+	raw := makeRawTorrent(t, validInfo())
+	mi, err := metainfo.Load(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	h := mi.HashInfoBytes().HexString()
+	p.torrents[h] = raw
+	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, nil)
+	srv.a = a
+	return srv, h, raw
+}
+
+// digestOf returns the digest the server will look up for this torrent.
+func digestOf(t *testing.T, raw []byte) string {
+	t.Helper()
+	blob, err := buildFingerprint(raw)
+	if err != nil {
+		t.Fatalf("buildFingerprint: %v", err)
+	}
+	d := fingerprintDigest(blob)
+	if len(d) != 32 {
+		t.Fatalf("expected a 32-byte digest, got %d bytes", len(d))
+	}
+	return hex.EncodeToString(d)
+}
+
+// The whole point: an infohash nobody ever reported is refused because its
+// payload is blocked under some other one.
+func TestPayloadBlockedUnderAnotherInfohash(t *testing.T) {
+	a := &fakeAbuse{byHash: map[string]bool{}, byDigest: map[string]bool{}}
+	srv, h, raw := serverWithTorrent(t, a)
+	a.byDigest[digestOf(t, raw)] = true
+
+	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Files: code = %v (err %v), want PermissionDenied", status.Code(err), err)
+	}
+	if _, err := srv.Pull(context.Background(), &pb.PullRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Pull: code = %v (err %v), want PermissionDenied", status.Code(err), err)
+	}
+	// And refused at ingest, so it is never stored in the first place.
+	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: raw}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Push: code = %v (err %v), want PermissionDenied", status.Code(err), err)
+	}
+}
+
+// Negative control: with the same wiring but the payload not blocked, all
+// three succeed. Without this the test above would pass on any failure.
+func TestPayloadNotBlockedPassesThrough(t *testing.T) {
+	a := &fakeAbuse{byHash: map[string]bool{}, byDigest: map[string]bool{}}
+	srv, h, raw := serverWithTorrent(t, a)
+
+	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); err != nil {
+		t.Fatalf("Files: %v", err)
+	}
+	if _, err := srv.Pull(context.Background(), &pb.PullRequest{InfoHash: h}); err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: raw}); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	if a.fpQueries == 0 {
+		t.Fatal("payload was never actually looked up")
+	}
+}
+
+// A flaky lookup must not take the service down: the infohash arm is the hard
+// gate and has already run.
+func TestPayloadLookupFailureIsNotFatal(t *testing.T) {
+	a := &fakeAbuse{byHash: map[string]bool{}, byDigest: map[string]bool{}, err: errors.New("upstream down")}
+	srv, h, _ := serverWithTorrent(t, a)
+	if _, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h}); err != nil {
+		t.Fatalf("a failing payload lookup blocked the request: %v", err)
+	}
+}
+
+// NewAbuse returns a nil *Abuse when abuse checking is off. Storing that in an
+// interface would give a non-nil interface holding a nil pointer, and every
+// guard would sail past it into a nil dereference.
+func TestNilAbuseStaysNil(t *testing.T) {
+	srv := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, nil, nil)
+	if srv.a != nil {
+		t.Fatal("a nil *Abuse became a non-nil interface")
 	}
 }

@@ -47,28 +47,24 @@ func NewAbuse(c *cli.Context, cl *AbuseClient) *Abuse {
 	}
 }
 
-// CheckFingerprints reports whether any of these content fingerprints belongs
-// to blocked material — that is, whether this payload is blocked under some
-// OTHER infohash we have never been told about.
+// CheckFingerprint reports whether this content fingerprint belongs to blocked
+// material — that is, whether this payload is blocked under some OTHER
+// infohash we have never been told about.
 //
-// Cached by the fingerprints themselves rather than by infoHash, so every
-// re-upload of one payload shares a single cache entry and a single lookup.
-func (s *Abuse) CheckFingerprints(ctx context.Context, fps [][]byte) (bool, error) {
-	if len(fps) == 0 {
+// Cached by the fingerprint itself rather than by infoHash, so every re-upload
+// of one payload shares a single cache entry and a single lookup.
+func (s *Abuse) CheckFingerprint(ctx context.Context, fp []byte) (bool, error) {
+	if len(fp) == 0 {
 		return false, nil
 	}
-	key := "fp:"
-	for _, fp := range fps {
-		key += hex.EncodeToString(fp)
-	}
-	return s.LazyMap.Get(key, func() (bool, error) {
+	return s.LazyMap.Get("fp:"+hex.EncodeToString(fp), func() (bool, error) {
 		cl, err := s.cl.Get()
 		if err != nil {
 			return false, err
 		}
 		// Infohash deliberately empty: the caller has already checked it, and
 		// leaving it out keeps this entry shared across every copy.
-		r, err := cl.Check(ctx, &as.CheckRequest{Fingerprints: fps})
+		r, err := cl.Check(ctx, &as.CheckRequest{Fingerprint: fp})
 		if err != nil {
 			return false, err
 		}
