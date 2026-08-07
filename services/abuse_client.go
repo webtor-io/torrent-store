@@ -7,6 +7,7 @@ import (
 	"github.com/urfave/cli"
 	as "github.com/webtor-io/abuse-store/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -50,7 +51,7 @@ func NewAbuseClient(c *cli.Context) *AbuseClient {
 func (s *AbuseClient) Get() (as.AbuseStoreClient, error) {
 	s.once.Do(func() {
 		addr := fmt.Sprintf("%s:%d", s.host, s.port)
-		conn, err := grpc.Dial(addr, grpc.WithInsecure())
+		conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			s.err = err
 			return

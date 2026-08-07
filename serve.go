@@ -68,25 +68,12 @@ func serve(c *cli.Context) (err error) {
 		defer pprof.Close()
 	}
 
-	var providers []s.StoreProvider
-
-	// Setting Badger Provider
+	// Setting Badger Provider — the node-local L1, serve-only
 	badger, err := p.NewBadger(c)
 	if err != nil {
 		return
 	}
 	defer badger.Close()
-	providers = append(providers, badger)
-
-	// Setting Redis Client
-	redisCl := cs.NewRedisClient(c)
-	defer redisCl.Close()
-
-	// Setting Redis Provider
-	redis := p.NewRedis(c, redisCl)
-	if redis != nil {
-		providers = append(providers, redis)
-	}
 
 	// Setting HTTP Client
 	myTransport := &http.Transport{
@@ -104,17 +91,12 @@ func serve(c *cli.Context) (err error) {
 		Transport: myTransport,
 	}
 
-	// Setting S3 Client
-	s3Cl := cs.NewS3Client(c, cl)
-
-	// Setting S3 Provider
-	s3 := p.NewS3(c, s3Cl)
-	if s3 != nil {
-		providers = append(providers, s3)
-	}
+	// Setting shared providers (Redis + S3)
+	shared, closeShared := sharedProviders(c, cl)
+	defer closeShared()
 
 	// Setting Store
-	store := s.NewStore(providers)
+	store := s.NewStore(append([]s.StoreProvider{badger}, shared...))
 
 	// Setting Abuse Client
 	aCl := s.NewAbuseClient(c)

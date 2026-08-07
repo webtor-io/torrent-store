@@ -46,14 +46,6 @@ func makeFingerprintsCMD() cli.Command {
 }
 
 func fingerprints(c *cli.Context) error {
-	var providers []s.StoreProvider
-
-	redisCl := cs.NewRedisClient(c)
-	defer redisCl.Close()
-	if redis := p.NewRedis(c, redisCl); redis != nil {
-		providers = append(providers, redis)
-	}
-
 	httpCl := &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
@@ -65,14 +57,9 @@ func fingerprints(c *cli.Context) error {
 			}).Dial,
 		},
 	}
-	s3Cl := cs.NewS3Client(c, httpCl)
-	if s3 := p.NewS3(c, s3Cl); s3 != nil {
-		providers = append(providers, s3)
-	}
-
-	// Badger is deliberately left out: it is a node-local L1 cache, so it holds
-	// nothing the shared tiers do not, and opening it here would collide with
-	// the running pod's own instance.
+	// Badger is deliberately absent — see sharedProviders.
+	providers, closeShared := sharedProviders(c, httpCl)
+	defer closeShared()
 	if len(providers) == 0 {
 		return fmt.Errorf("no shared store providers configured")
 	}

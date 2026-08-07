@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"strings"
 	"time"
@@ -11,10 +10,11 @@ import (
 	"github.com/urfave/cli"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 func push(c pb.TorrentStoreClient, path string) error {
-	bytes, err := ioutil.ReadFile(path)
+	bytes, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func pull(c pb.TorrentStoreClient, infoHash string, path string) error {
 	if err != nil {
 		return err
 	}
-	err = ioutil.WriteFile(path, r.Torrent, 0644)
+	err = os.WriteFile(path, r.Torrent, 0644)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func files(c pb.TorrentStoreClient, infoHash string) error {
 
 func withClient(host string, port int, action func(c pb.TorrentStoreClient) error) error {
 	address := fmt.Sprintf("%s:%d", host, port)
-	conn, err := grpc.Dial(address, grpc.WithInsecure())
+	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}

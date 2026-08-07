@@ -70,7 +70,6 @@ func NewStore(providers []StoreProvider) *Store {
 	var revProviders []StoreProvider
 	for _, p := range providers {
 		log.WithField("provider", p.Name()).Info("use provider")
-
 	}
 	for i := len(providers) - 1; i >= 0; i-- {
 		revProviders = append(revProviders, providers[i])
@@ -103,16 +102,13 @@ func (s *Store) checkRate(h string) bool {
 	return a.Load() < 10
 }
 
+// incRate counts misses. No decrement is needed: the rate entry expires 60s
+// after creation (ratem's Expire, and nothing ever refreshes it), and that
+// eviction is what actually resets the window. The per-increment decrement
+// goroutines this used to spawn always fired at or after the eviction, onto
+// an orphaned counter.
 func (s *Store) incRate(h string) {
-	a := s.getRate(h)
-	if a.Load() > 15 {
-		return
-	}
-	go func() {
-		<-time.After(time.Minute)
-		a.Add(-1)
-	}()
-	a.Add(1)
+	s.getRate(h).Add(1)
 }
 
 func (s *Store) getRate(h string) *atomic.Int64 {

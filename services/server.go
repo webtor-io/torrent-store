@@ -181,7 +181,7 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	}
 	s.s.pullm.Drop(infoHash)
 
-	hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent succesfully pushed")
+	hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent successfully pushed")
 	return &pb.PushReply{InfoHash: infoHash}, nil
 }
 

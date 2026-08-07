@@ -29,9 +29,12 @@ var (
 	ErrAbuse = errors.New("store: torrent abused")
 )
 
+// Abuse caches the blocking oracle's answers for a minute. The cache is a
+// named field rather than an embedded LazyMap so its Drop/Keys/Len do not
+// leak into Abuse's API.
 type Abuse struct {
-	*lazymap.LazyMap[bool]
-	cl *AbuseClient
+	cache *lazymap.LazyMap[bool]
+	cl    *AbuseClient
 }
 
 func NewAbuse(c *cli.Context, cl *AbuseClient) *Abuse {
@@ -40,7 +43,7 @@ func NewAbuse(c *cli.Context, cl *AbuseClient) *Abuse {
 	}
 	return &Abuse{
 		cl: cl,
-		LazyMap: lazymap.New[bool](&lazymap.Config{
+		cache: lazymap.New[bool](&lazymap.Config{
 			Expire:      time.Minute,
 			StoreErrors: false,
 		}),
@@ -57,7 +60,7 @@ func (s *Abuse) CheckFingerprint(ctx context.Context, fp []byte) (bool, error) {
 	if len(fp) == 0 {
 		return false, nil
 	}
-	return s.LazyMap.Get("fp:"+hex.EncodeToString(fp), func() (bool, error) {
+	return s.cache.Get("fp:"+hex.EncodeToString(fp), func() (bool, error) {
 		cl, err := s.cl.Get()
 		if err != nil {
 			return false, err
@@ -73,7 +76,7 @@ func (s *Abuse) CheckFingerprint(ctx context.Context, fp []byte) (bool, error) {
 }
 
 func (s *Abuse) Get(ctx context.Context, h string) (bool, error) {
-	return s.LazyMap.Get(h, func() (bool, error) {
+	return s.cache.Get(h, func() (bool, error) {
 		cl, err := s.cl.Get()
 		if err != nil {
 			return false, err
