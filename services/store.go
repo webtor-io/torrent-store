@@ -121,7 +121,6 @@ func (s *Store) touch(ctx context.Context, h string) (ok bool, err error) {
 		log.WithField("infohash", h).Warn("get rate limit")
 		return false, ErrNotFound
 	}
-	s.touchm.Touch(h)
 	for i, v := range s.providers {
 		t := time.Now()
 		ok, err = v.Touch(ctx, h)
@@ -134,8 +133,13 @@ func (s *Store) touch(ctx context.Context, h string) (ok bool, err error) {
 		}
 		log.WithField("infohash", h).WithField("duration", time.Since(t)).WithField("provider", v.Name()).Info("provider touch")
 		if i > 0 {
+			// Warm the upper tiers off the request path. WithoutCancel:
+			// the RPC returning (which it does immediately) cancels the
+			// request context, and a warm-up killed on line one warms
+			// nothing.
+			warmCtx := context.WithoutCancel(ctx)
 			go func() {
-				_, _ = s.pull(ctx, h, i)
+				_, _ = s.pull(warmCtx, h, i)
 			}()
 		}
 		break
