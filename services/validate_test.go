@@ -64,6 +64,31 @@ func TestValidateInfoGeometry(t *testing.T) {
 			wantErr: "geometry mismatch",
 		},
 		{
+			// Overflow bypass: 4*(1<<62) wraps to 0 in int64, so the computed
+			// last-piece length lands back in the "valid" range and nonsense
+			// geometry sails through. The piece-length cap must catch it
+			// before the multiplication.
+			name: "crafted piece length overflows the geometry math",
+			info: metainfo.Info{
+				Name:        "a",
+				Length:      100,
+				PieceLength: 1 << 62,
+				Pieces:      make([]byte, 5*20),
+			},
+			wantErr: "piece length",
+		},
+		{
+			// The largest piece length seen in the wild is 128 MiB; the cap
+			// sits at double that so no real torrent is refused.
+			name: "128 MiB piece length is accepted",
+			info: metainfo.Info{
+				Name:        "a",
+				Length:      128 << 20,
+				PieceLength: 128 << 20,
+				Pieces:      make([]byte, 20),
+			},
+		},
+		{
 			name: "negative file length",
 			info: metainfo.Info{
 				Name:        "d",

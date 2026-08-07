@@ -12,9 +12,21 @@ import (
 // trust this invariant and panic inside metainfo.Piece.V1Length when it is
 // violated, taking the whole pod down, so a torrent that fails this check
 // can never be served and must be refused.
+// maxPieceLength caps the declared piece size. The largest value seen in the
+// wild is 128 MiB; the cap sits at double that so no real torrent is refused.
+// It must stay well under math.MaxInt64/numPieces for any plausible piece
+// count: a crafted PieceLength like 1<<62 overflows the (numPieces-1)*
+// PieceLength product below, wraps the computed last-piece length back into
+// the "valid" range, and lets nonsense geometry through the very check that
+// exists to keep it out.
+const maxPieceLength = 256 << 20
+
 func ValidateInfoGeometry(info *metainfo.Info) error {
 	if info.PieceLength <= 0 {
 		return fmt.Errorf("piece length must be positive, got %d", info.PieceLength)
+	}
+	if info.PieceLength > maxPieceLength {
+		return fmt.Errorf("piece length %d exceeds the %d cap", info.PieceLength, int64(maxPieceLength))
 	}
 	if len(info.Pieces) == 0 {
 		return fmt.Errorf("no v1 pieces")
