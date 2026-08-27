@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	sl "github.com/webtor-io/stoplist"
+	"golang.org/x/text/unicode/norm"
 )
 
 // Reuses the normalize() pipeline from Stoplist verbatim to mirror
@@ -17,6 +18,7 @@ var normRe2 = regexp.MustCompile(`(\d+)`)
 var normRe3 = regexp.MustCompile(`\s+`)
 
 func benchNormalize(s string) string {
+	s = norm.NFC.String(s)
 	s = strings.ToLower(s)
 	s = normRe1.ReplaceAllString(s, " ")
 	s = normRe2.ReplaceAllString(s, " $1 ")

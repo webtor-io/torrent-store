@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/urfave/cli"
+	"golang.org/x/text/unicode/norm"
 	sl "github.com/webtor-io/stoplist"
 )
 
@@ -273,6 +274,10 @@ func ruleLabel(cr *sl.CheckResult) string {
 }
 
 func (s *Stoplist) normalize(str string) string {
+	// macOS-authored torrents carry NFD names; combining marks are not
+	// \p{L}, so without composition re1 shreds "años" into "an os" and
+	// every diacritic stoplist token misses.
+	str = norm.NFC.String(str)
 	str = strings.ToLower(str)
 	str = re1.ReplaceAllString(str, " ")
 	str = re2.ReplaceAllString(str, " $1 ")
