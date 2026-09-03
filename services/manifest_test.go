@@ -3,8 +3,10 @@ package services
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
@@ -246,5 +248,37 @@ func TestStoreManifestServesFromCacheWithoutBuild(t *testing.T) {
 	got := &pb.FilesReply{}
 	if err := proto.Unmarshal(out, got); err != nil || got.GetName() != "pre" {
 		t.Fatalf("bad cached payload: %v", err)
+	}
+}
+
+// A torrent whose name or paths are not valid UTF-8 (legacy GBK/Shift-JIS
+// encoders) must still yield a manifest that proto can marshal: proto3
+// string fields reject invalid UTF-8, and before the fix the whole Files
+// call failed with "string field contains invalid UTF-8".
+func TestBuildManifestSanitizesInvalidUTF8(t *testing.T) {
+	gbk := "(FKK) \xb6\xe0\xce\xbb.avi" // "多位" in GBK, invalid as UTF-8
+	torrent := makeMultiFileTorrent(t, gbk, []metainfo.FileInfo{
+		{Path: []string{"dir\xb6", "file\xe0.avi"}, Length: 100},
+	})
+	reply, err := buildManifest(torrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !utf8.ValidString(reply.GetName()) {
+		t.Fatalf("name is not valid UTF-8: %q", reply.GetName())
+	}
+	for _, f := range reply.GetFiles() {
+		for _, p := range f.GetPath() {
+			if !utf8.ValidString(p) {
+				t.Fatalf("path element is not valid UTF-8: %q", p)
+			}
+		}
+	}
+	if _, err := proto.Marshal(reply); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Readable ASCII must survive sanitisation.
+	if !strings.HasPrefix(reply.GetName(), "(FKK) ") || !strings.HasSuffix(reply.GetName(), ".avi") {
+		t.Fatalf("name lost readable bytes: %q", reply.GetName())
 	}
 }
