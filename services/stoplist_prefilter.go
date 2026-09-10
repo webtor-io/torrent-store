@@ -41,7 +41,10 @@ type prefilter struct {
 //
 // Sections (`age`, `sexual`, `name`, `stopwords`) all contribute;
 // the `main` section is skipped — it only references the other
-// sections and contains no new leaf patterns.
+// sections and contains no new leaf patterns. The `except` section
+// is skipped too: its entries are release markers that DISCARD a
+// stopwords hit (see Stoplist.checkNormalized), so folding them into
+// the alternation would make every FLAC rip pay for the full tree.
 func newPrefilter(path string) (*prefilter, error) {
 	if path == "" {
 		return nil, nil
@@ -50,6 +53,12 @@ func newPrefilter(path string) (*prefilter, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to read stoplist for prefilter %q", path)
 	}
+	return newPrefilterFromYaml(raw)
+}
+
+// newPrefilterFromYaml builds the prefilter from stoplist YAML bytes
+// already in hand. Same contract as newPrefilter.
+func newPrefilterFromYaml(raw []byte) (*prefilter, error) {
 	var sections map[string][]string
 	if err := yaml.Unmarshal(raw, &sections); err != nil {
 		return nil, errors.Wrap(err, "failed to parse stoplist yaml for prefilter")
@@ -58,7 +67,7 @@ func newPrefilter(path string) (*prefilter, error) {
 	var alts []string
 	seen := map[string]struct{}{}
 	for section, items := range sections {
-		if section == "main" {
+		if section == stoplistMainKey || section == stoplistExceptKey {
 			continue
 		}
 		for _, item := range items {
