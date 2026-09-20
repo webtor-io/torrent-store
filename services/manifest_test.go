@@ -282,3 +282,68 @@ func TestBuildManifestSanitizesInvalidUTF8(t *testing.T) {
 		t.Fatalf("name lost readable bytes: %q", reply.GetName())
 	}
 }
+
+// A cached manifest built under another stoplist version is a miss: it is
+// rebuilt and written back under the same key. Before this, a manifest cached
+// before a rule was added kept being served after it.
+func TestStoreManifestIfRebuildsRejectedBlob(t *testing.T) {
+	fast := newFakeProvider("fast", true)
+	store := NewStore([]StoreProvider{fast})
+	torrent := makeMultiFileTorrent(t, "x", []metainfo.FileInfo{{Path: []string{"a"}, Length: 1}})
+	const h = "feedface"
+	_, _ = fast.Push(context.Background(), h, torrent)
+	_, _ = fast.PushDerived(context.Background(), DerivedManifest, h, []byte("oldstamp00000000payload"))
+
+	const stamp = "newstamp00000000"
+	valid := func(b []byte) bool { return hasManifestStamp(b, stamp) }
+	builds := 0
+	build := func(b []byte) ([]byte, error) {
+		builds++
+		r, err := buildManifest(b)
+		if err != nil {
+			return nil, err
+		}
+		out, err := proto.Marshal(r)
+		return append([]byte(stamp), out...), err
+	}
+
+	out, err := store.ManifestIf(context.Background(), h, valid, build)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if builds != 1 {
+		t.Fatalf("builds = %d, want 1 (stale blob must be rebuilt)", builds)
+	}
+	if !hasManifestStamp(out, stamp) || !hasManifestStamp(fast.manifests[h], stamp) {
+		t.Fatalf("rebuilt manifest must carry the new stamp and replace the cached one")
+	}
+
+	// Same stamp, fresh store (the in-process map would otherwise answer):
+	// served from the tier, not rebuilt.
+	store2 := NewStore([]StoreProvider{fast})
+	builds = 0
+	if _, err := store2.ManifestIf(context.Background(), h, valid, build); err != nil {
+		t.Fatal(err)
+	}
+	if builds != 0 {
+		t.Fatalf("builds = %d, want 0 (matching stamp is a hit)", builds)
+	}
+}
+
+func TestStoplistVersionTracksRuleFile(t *testing.T) {
+	a, err := newStoplistFromYaml([]byte("main:\n  - foo\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := newStoplistFromYaml([]byte("main:\n  - foo\n  - bar\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Version()) != manifestStampLen || a.Version() == b.Version() {
+		t.Fatalf("versions %q / %q must be %d chars and differ", a.Version(), b.Version(), manifestStampLen)
+	}
+	var none *Stoplist
+	if none.Version() != "" || manifestStamp(none.Version()) != strings.Repeat("0", manifestStampLen) {
+		t.Fatalf("nil stoplist must stamp as zeros")
+	}
+}

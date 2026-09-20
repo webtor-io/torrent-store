@@ -249,7 +249,8 @@ func (s *Store) pushDerived(ctx context.Context, kind DerivedKind, h string, blo
 // build() from the stored .torrent on a miss and persisting it across tiers.
 // The whole get-or-build is singleflighted per (kind, infoHash) so a cold
 // burst on the same torrent triggers at most one Pull+parse. Derived blobs
-// are immutable per infoHash, so no invalidation is needed.
+// are immutable per infoHash for a given build; valid() lets a caller reject
+// a blob produced by an older build (see ManifestIf).
 //
 // persistAsync moves the tier writes off the request path, with
 // context.WithoutCancel so a client disconnecting mid-request does not abort
@@ -257,13 +258,15 @@ func (s *Store) pushDerived(ctx context.Context, kind DerivedKind, h string, blo
 // to answer — the value is already in hand and the in-process map holds it —
 // and a lost write only costs a re-derive later, which is what a failed write
 // already costs.
-func (s *Store) getOrBuildDerived(ctx context.Context, kind DerivedKind, h string, build func(torrent []byte) ([]byte, error), persistAsync bool) ([]byte, error) {
+func (s *Store) getOrBuildDerived(ctx context.Context, kind DerivedKind, h string, valid func(blob []byte) bool, build func(torrent []byte) ([]byte, error), persistAsync bool) ([]byte, error) {
 	return s.derivedm.Get(string(kind)+":"+h, func() ([]byte, error) {
 		blob, err := s.pullDerived(ctx, kind, h, 0)
 		if err == nil {
-			return blob, nil
-		}
-		if !errors.Is(err, ErrNotFound) {
+			if valid == nil || valid(blob) {
+				return blob, nil
+			}
+			log.WithField("infohash", h).Info(string(kind) + " cached blob rejected, rebuilding")
+		} else if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
 		torrent, err := s.Pull(ctx, h)
@@ -287,7 +290,16 @@ func (s *Store) getOrBuildDerived(ctx context.Context, kind DerivedKind, h strin
 // moving it off the request path is a measurable behaviour change for Files
 // and gets decided on its own numbers, not inherited from fingerprints.
 func (s *Store) Manifest(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
-	return s.getOrBuildDerived(ctx, DerivedManifest, h, build, false)
+	return s.ManifestIf(ctx, h, nil, build)
+}
+
+// ManifestIf is Manifest with a validity check on what the cache holds: a
+// cached blob that valid() rejects is treated as a miss, rebuilt and written
+// back under the same key. Files stamps manifests with the stoplist version
+// and rejects other stamps — a manifest cached before a rule was added kept
+// being served after it, 7 of the top-25 stoplisted hashes on 2026-09-19.
+func (s *Store) ManifestIf(ctx context.Context, h string, valid func(blob []byte) bool, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
+	return s.getOrBuildDerived(ctx, DerivedManifest, h, valid, build, false)
 }
 
 // Fingerprint returns the cached content fingerprints for h.
@@ -297,7 +309,7 @@ func (s *Store) Manifest(ctx context.Context, h string, build func(torrent []byt
 // pulling those bytes and parsing them. Persisted asynchronously — the S3
 // write alone costs ~50ms at the median, two orders more than the Redis one.
 func (s *Store) Fingerprint(ctx context.Context, h string, build func(torrent []byte) ([]byte, error)) ([]byte, error) {
-	return s.getOrBuildDerived(ctx, DerivedFingerprint, h, build, true)
+	return s.getOrBuildDerived(ctx, DerivedFingerprint, h, nil, build, true)
 }
 
 // CachedFingerprint returns an already-derived fingerprint, or ErrNotFound.

@@ -1,6 +1,8 @@
 package services
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"regexp"
@@ -121,6 +123,10 @@ type Stoplist struct {
 	// source text (for the log line). Empty when the rule file has no
 	// except section — then cc is nil and the except layer is inert.
 	except []exceptRule
+	// version identifies the rule file this Stoplist was built from (first
+	// 16 hex of its sha256). Cached manifests carry it as a stamp, so a
+	// stoplist change invalidates them on the next read.
+	version string
 	// cc is a second rule tree built from the same YAML with main:
 	// reduced to its composite lines (line 0 dropped). Consulted only
 	// after an except regex discarded a stopwords hit.
@@ -155,6 +161,8 @@ func NewStoplist(c *cli.Context) (*Stoplist, error) {
 // malformed block rule — the service must not start on a rule file it
 // cannot honour.
 func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
+	sum := sha256.Sum256(raw)
+	version := hex.EncodeToString(sum[:])[:manifestStampLen]
 	sections := map[string][]string{}
 	if err := yaml.Unmarshal(raw, sections); err != nil {
 		return nil, errors.Wrap(err, "failed to parse stoplist yaml")
@@ -174,6 +182,7 @@ func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
 		return nil, err
 	}
 	s := &Stoplist{
+		version:   version,
 		c:         ch,
 		except:    except,
 		mainLines: len(main),
@@ -473,4 +482,13 @@ func (s *Stoplist) normalize(str string) string {
 	str = re3.ReplaceAllString(str, " ")
 	str = strings.TrimSpace(str)
 	return str
+}
+
+// Version identifies the rule file (16 hex of its sha256); "" when no
+// stoplist is configured.
+func (s *Stoplist) Version() string {
+	if s == nil {
+		return ""
+	}
+	return s.version
 }

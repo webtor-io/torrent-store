@@ -185,6 +185,24 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	return &pb.PushReply{InfoHash: infoHash}, nil
 }
 
+// manifestStampLen is the fixed prefix a cached manifest carries: the
+// stoplist version it was built under. A blob without it (cached before
+// stamping existed) fails the check like any other stale one.
+const manifestStampLen = 16
+
+// manifestStamp pads or truncates a stoplist version to the stamp width; an
+// empty version (no stoplist configured) stamps as zeros.
+func manifestStamp(version string) string {
+	if len(version) >= manifestStampLen {
+		return version[:manifestStampLen]
+	}
+	return version + strings.Repeat("0", manifestStampLen-len(version))
+}
+
+func hasManifestStamp(blob []byte, stamp string) bool {
+	return len(blob) >= manifestStampLen && string(blob[:manifestStampLen]) == stamp
+}
+
 func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
@@ -198,12 +216,18 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 		return nil, err
 	}
 
-	manifest, err := s.s.Manifest(ctx, infoHash, func(torrent []byte) ([]byte, error) {
+	// The stoplist is enforced at build time, when the torrent bytes are in
+	// hand, so the cached manifest is stamped with the stoplist version and
+	// a blob built under another version is rebuilt: 7 of the top-25
+	// stoplisted hashes were still being listed from cache on 2026-09-19.
+	stamp := manifestStamp(s.sl.Version())
+	manifest, err := s.s.ManifestIf(ctx, infoHash, func(blob []byte) bool {
+		return hasManifestStamp(blob, stamp)
+	}, func(torrent []byte) ([]byte, error) {
 		pt, perr := parseTorrent(torrent)
 		if perr != nil {
 			return nil, perr
 		}
-		// Stoplist is enforced at build time, when we have the torrent bytes.
 		if serr := s.checkStoplist(pt, hLog, t, infoHash); serr != nil {
 			return nil, serr
 		}
@@ -211,11 +235,16 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 		if berr != nil {
 			return nil, berr
 		}
-		return proto.Marshal(reply)
+		b, merr := proto.Marshal(reply)
+		if merr != nil {
+			return nil, merr
+		}
+		return append([]byte(stamp), b...), nil
 	})
 	if err != nil {
 		return nil, rpcError(err, hLog, t, infoHash, "failed to get manifest")
 	}
+	manifest = manifest[manifestStampLen:]
 
 	if err = s.gatePayload(ctx, infoHash, nil, hLog, t); err != nil {
 		return nil, err
