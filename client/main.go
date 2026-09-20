@@ -85,7 +85,13 @@ func files(c pb.TorrentStoreClient, infoHash string) error {
 
 func withClient(host string, port int, action func(c pb.TorrentStoreClient) error) error {
 	address := fmt.Sprintf("%s:%d", host, port)
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 50 MB like rest-api and torrent-archiver: the default 4 MB cannot take
+	// the manifest of a 184k-file torrent (17.9 MB), which is exactly the
+	// kind of hash this client is pointed at during an incident.
+	conn, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(50*1024*1024)),
+	)
 	if err != nil {
 		return err
 	}
