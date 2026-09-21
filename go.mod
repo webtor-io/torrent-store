@@ -12,8 +12,8 @@ require (
 	github.com/webtor-io/abuse-store v0.0.0-20260807084622-80685fa640e9
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
 	github.com/webtor-io/lazymap v0.0.0-20260807153732-a258d93d42f4
-	golang.org/x/sys v0.45.0 // indirect
-	google.golang.org/grpc v1.83.1
+	golang.org/x/sys v0.47.0 // indirect
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -22,7 +22,7 @@ require (
 	github.com/redis/go-redis/v9 v9.16.0
 	github.com/wasilibs/go-re2 v1.10.0
 	github.com/webtor-io/stoplist v0.1.0
-	golang.org/x/text v0.37.0
+	golang.org/x/text v0.41.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -76,9 +76,9 @@ require (
 	github.com/wasilibs/wazero-helpers v0.0.0-20240620070341-3dff1577cd52 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
-	golang.org/x/crypto v0.52.0 // indirect
+	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792 // indirect
-	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
