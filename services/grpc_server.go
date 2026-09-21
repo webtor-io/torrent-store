@@ -66,14 +66,7 @@ func (s *GRPCServer) Serve() error {
 	}
 	s.ln = ln
 
-	gs := grpc.NewServer(
-		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
-		grpc.MaxSendMsgSize(grpcMaxMsgSize),
-	)
-
-	pb.RegisterTorrentStoreServer(gs, s.s)
-
-	reflection.Register(gs)
+	gs := s.newServer()
 
 	s.mu.Lock()
 	s.gs = gs
@@ -81,6 +74,29 @@ func (s *GRPCServer) Serve() error {
 
 	logrus.Infof("serving GRPC at %v", addr)
 	return gs.Serve(ln)
+}
+
+// newServer builds the gRPC server with its interceptors and the service
+// registered. Split from Serve so a test can drive the same server over an
+// in-memory listener.
+func (s *GRPCServer) newServer() *grpc.Server {
+	gs := grpc.NewServer(
+		grpc.MaxRecvMsgSize(grpcMaxMsgSize),
+		grpc.MaxSendMsgSize(grpcMaxMsgSize),
+		grpc.ChainUnaryInterceptor(grpcMetrics.UnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(grpcMetrics.StreamServerInterceptor()),
+	)
+
+	pb.RegisterTorrentStoreServer(gs, s.s)
+
+	reflection.Register(gs)
+
+	// Pre-populate the per-method series with zero values, so a method that
+	// has not been called yet still shows up (and a rate() over it is 0,
+	// not absent). Must run after registration — it reads the service info.
+	grpcMetrics.InitializeMetrics(gs)
+
+	return gs
 }
 
 // Close drains in-flight RPCs before returning.

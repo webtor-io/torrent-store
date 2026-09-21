@@ -53,6 +53,7 @@ var (
 )
 
 func NewStore(providers []StoreProvider) *Store {
+	providers = meterProviders(providers)
 	cfg := &lazymap.Config{
 		Expire:      5 * time.Minute,
 		StoreErrors: false,
@@ -261,14 +262,18 @@ func (s *Store) pushDerived(ctx context.Context, kind DerivedKind, h string, blo
 func (s *Store) getOrBuildDerived(ctx context.Context, kind DerivedKind, h string, valid func(blob []byte) bool, build func(torrent []byte) ([]byte, error), persistAsync bool) ([]byte, error) {
 	return s.derivedm.Get(string(kind)+":"+h, func() ([]byte, error) {
 		blob, err := s.pullDerived(ctx, kind, h, 0)
+		result := manifestBuilt
 		if err == nil {
 			if valid == nil || valid(blob) {
+				observeManifest(kind, manifestHit)
 				return blob, nil
 			}
 			log.WithField("infohash", h).Info(string(kind) + " cached blob rejected, rebuilding")
+			result = manifestRebuilt
 		} else if !errors.Is(err, ErrNotFound) {
 			return nil, err
 		}
+		observeManifest(kind, result)
 		torrent, err := s.Pull(ctx, h)
 		if err != nil {
 			return nil, err
@@ -284,6 +289,15 @@ func (s *Store) getOrBuildDerived(ctx context.Context, kind DerivedKind, h strin
 		}
 		return blob, nil
 	})
+}
+
+// observeManifest records the cache result for manifest lookups only —
+// fingerprints share the derived path but have no rebuild case worth a
+// series, and mixing kinds would make the ratio meaningless.
+func observeManifest(kind DerivedKind, result string) {
+	if kind == DerivedManifest {
+		manifestTotal.WithLabelValues(result).Inc()
+	}
 }
 
 // Manifest returns the cached file manifest for h. Persisted synchronously —
