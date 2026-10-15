@@ -35,7 +35,7 @@ func BenchmarkPhases(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	data := s.getData(pt)
+	data, _ := s.getData(pt)
 	// Pre-normalise once (out of the loop) so phases below skip it
 	normalised := make([]string, len(data))
 	for i, d := range data {
@@ -46,7 +46,7 @@ func BenchmarkPhases(b *testing.B) {
 	b.Run("getData", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
 			if p, perr := parseTorrent(torrent); perr == nil {
-				_ = s.getData(p)
+				_, _ = s.getData(p)
 			}
 		}
 	})

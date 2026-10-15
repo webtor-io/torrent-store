@@ -1,9 +1,12 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
+	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/metainfo"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -61,4 +64,60 @@ func TestAbuseGateMatrix(t *testing.T) {
 			t.Fatalf("Touch must stay ungated, got %v", err)
 		}
 	})
+}
+
+// A torrent the stoplist refused at Push is never stored, so Touch used to
+// answer NotFound and the caller resolved the same magnet again, only to be
+// refused again. Touch now refuses it too — but only under the rules that
+// refused it.
+func TestTouchRemembersStoplistRefusal(t *testing.T) {
+	srv := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, mustStoplist(t, noExceptFixture), nil)
+	raw := makeRawTorrent(t, metainfo.Info{Name: "foo bar", Length: 1500, PieceLength: 1024, Pieces: make([]byte, 2*20)})
+	pt, err := parseTorrent(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := pt.mi.HashInfoBytes().HexString()
+	touch := func() codes.Code {
+		_, err := srv.Touch(context.Background(), &pb.TouchRequest{InfoHash: h})
+		return status.Code(err)
+	}
+
+	if c := touch(); c != codes.NotFound {
+		t.Fatalf("Touch before any Push: code = %v, want NotFound", c)
+	}
+	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: raw}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Push: code = %v, want PermissionDenied", status.Code(err))
+	}
+	if c := touch(); c != codes.PermissionDenied {
+		t.Fatalf("Touch after the refusal: code = %v, want PermissionDenied", c)
+	}
+	// Different rules, different version: the refusal no longer stands.
+	srv.sl = mustStoplist(t, exceptFixture)
+	if c := touch(); c != codes.NotFound {
+		t.Fatalf("Touch under another stoplist version: code = %v, want NotFound", c)
+	}
+}
+
+// The comment and createdBy are not part of the infohash: a file refused only
+// by its comment says nothing about the magnet's payload (magnet2torrent sends
+// its own constant pair), so Touch must not start refusing the infohash.
+func TestTouchIgnoresRefusalByComment(t *testing.T) {
+	srv := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, mustStoplist(t, noExceptFixture), nil)
+	infoBytes, err := bencode.Marshal(metainfo.Info{Name: "clean name", Length: 1500, PieceLength: 1024, Pieces: make([]byte, 2*20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mi := metainfo.MetaInfo{InfoBytes: infoBytes, Comment: "foo bar"}
+	var buf bytes.Buffer
+	if err := mi.Write(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: buf.Bytes()}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Push: code = %v, want PermissionDenied", status.Code(err))
+	}
+	_, err = srv.Touch(context.Background(), &pb.TouchRequest{InfoHash: mi.HashInfoBytes().HexString()})
+	if c := status.Code(err); c != codes.NotFound {
+		t.Fatalf("Touch after a refusal by comment: code = %v, want NotFound", c)
+	}
 }

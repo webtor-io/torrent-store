@@ -229,9 +229,12 @@ func compileExcept(items []string) ([]exceptRule, error) {
 	return out, nil
 }
 
-func (s *Stoplist) getData(pt *parsedTorrent) []string {
+// getData returns the strings the stoplist screens. The first n come from the
+// info dict (name, file paths), which the infohash pins; the rest (comment,
+// createdBy) belong to this file only: magnet2torrent's payload for the same
+// infohash carries its own constant pair.
+func (s *Stoplist) getData(pt *parsedTorrent) (data []string, n int) {
 	mi, i := pt.mi, &pt.info
-	var data []string
 	data = append(data, i.Name)
 	for _, file := range i.Files {
 		path := file.PathUtf8
@@ -240,6 +243,7 @@ func (s *Stoplist) getData(pt *parsedTorrent) []string {
 		}
 		data = append(data, strings.Join(path, " "))
 	}
+	n = len(data)
 	// Comment + creator — CSAM-distribution torrents often have
 	// neutral filenames but advertise the source forum through the
 	// comment field ("hash on cpchans.xyz") or through a deliberately
@@ -261,7 +265,7 @@ func (s *Stoplist) getData(pt *parsedTorrent) []string {
 	if mi.CreatedBy != "" {
 		data = append(data, mi.CreatedBy)
 	}
-	return data
+	return data, n
 }
 
 // truncateRunes returns the first `max` runes of s. Used to cap
@@ -284,12 +288,15 @@ func (s *Stoplist) Check(b []byte) (*sl.CheckResult, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to get torrent text data")
 	}
-	return s.CheckParsed(pt)
+	cr, _, err := s.CheckParsed(pt)
+	return cr, err
 }
 
 // CheckParsed normalises every data string (name, file paths, comment,
 // createdBy) and runs the full stoplist rule tree over each. Returns the
-// first positive CheckResult or an empty one when no rule fires.
+// first positive CheckResult or an empty one when no rule fires. The info
+// dict is checked first; byInfo reports a hit there, which holds for every
+// torrent with this infohash, unlike a hit on the comment or createdBy.
 //
 // Heavyweight packs ship 4000+ data strings, so the loop is run in
 // parallel across runtime.GOMAXPROCS workers. The stoplist library's
@@ -304,16 +311,23 @@ func (s *Stoplist) Check(b []byte) (*sl.CheckResult, error) {
 // case where multiple data strings would match — we only persist
 // found/not-found and a Prometheus rule-label, so the indeterminism
 // is acceptable.
-func (s *Stoplist) CheckParsed(pt *parsedTorrent) (*sl.CheckResult, error) {
-	data := s.getData(pt)
+func (s *Stoplist) CheckParsed(pt *parsedTorrent) (cr *sl.CheckResult, byInfo bool, err error) {
+	data, n := s.getData(pt)
+	if cr = s.checkData(data[:n]); cr.Found {
+		return cr, true, nil
+	}
+	return s.checkData(data[n:]), false, nil
+}
+
+func (s *Stoplist) checkData(data []string) *sl.CheckResult {
 	if len(data) == 0 {
-		return &sl.CheckResult{}, nil
+		return &sl.CheckResult{}
 	}
 	if len(data) == 1 {
 		// One-shot: skip the goroutine overhead.
-		return s.checkOne(data[0]), nil
+		return s.checkOne(data[0])
 	}
-	return s.checkParallel(data), nil
+	return s.checkParallel(data)
 }
 
 // checkOne normalises one data string and runs checkNormalized over
