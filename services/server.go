@@ -8,6 +8,7 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
+	"github.com/webtor-io/lazymap"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,6 +57,12 @@ type Server struct {
 	a               abuseChecker
 	sl              *Stoplist
 	defaultTrackers []string
+	// refused remembers infohashes the stoplist turned away, keyed by
+	// stoplist version. A torrent refused at Push is never stored, so
+	// without this Touch answers NotFound and every repeat of the magnet
+	// goes back to magnet2torrent (19% of its requests in October 2026).
+	// ponytail: per pod, a repeat landing on another pod resolves once more.
+	refused *lazymap.LazyMap[bool]
 }
 
 func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Server {
@@ -63,6 +70,9 @@ func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Serv
 		s:               s,
 		sl:              sl,
 		defaultTrackers: defaultTrackers,
+		// ~300 distinct hashes a day are refused across all pods; the
+		// capacity is only a ceiling.
+		refused: lazymap.New[bool](&lazymap.Config{Expire: 24 * time.Hour, Capacity: 10000}),
 	}
 	// Assign only when non-nil. NewAbuse returns a nil *Abuse when abuse
 	// checking is off, and storing that straight into an interface would give
@@ -120,6 +130,7 @@ func (s *Server) checkStoplist(pt *parsedTorrent, log *log.Entry, t time.Time, h
 	}
 	if cr.Found {
 		log.WithField("duration", time.Since(t)).Warnf("found in stoplist %v", cr.String())
+		_, _ = s.refused.Get(s.sl.Version()+hash, func() (bool, error) { return true, nil })
 		return status.Errorf(codes.PermissionDenied, "found in stoplist infoHash=%v: %s", hash, cr.String())
 	}
 	return nil
@@ -315,7 +326,10 @@ func rpcError(err error, hLog *log.Entry, t time.Time, h string, msg string) err
 }
 
 // Touch runs no abuse gate at all — see the matrix in abuse_gate.go: it only
-// refreshes the storage TTL, and serving is gated at Pull/Files.
+// refreshes the storage TTL, and serving is gated at Pull/Files. The one
+// refusal it gives is for a torrent that is not stored because the stoplist
+// refused it under the current rules: answering NotFound there sends the
+// caller to resolve the magnet again only to be refused at Push.
 func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
@@ -323,6 +337,12 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 	hLog.Info("touch torrent request")
 
 	_, err := s.s.Touch(ctx, infoHash)
+	if errors.Is(err, ErrNotFound) {
+		if _, ok := s.refused.Status(s.sl.Version() + infoHash); ok {
+			hLog.WithField("duration", time.Since(t)).Info("refused by stoplist earlier")
+			return nil, status.Errorf(codes.PermissionDenied, "found in stoplist infoHash=%v", infoHash)
+		}
+	}
 	if err != nil {
 		return nil, rpcError(err, hLog, t, infoHash, "failed to touch torrent")
 	}
