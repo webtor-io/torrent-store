@@ -123,14 +123,18 @@ func (s *Server) checkStoplist(pt *parsedTorrent, log *log.Entry, t time.Time, h
 	if s.sl == nil {
 		return nil
 	}
-	cr, err := s.sl.CheckParsed(pt)
+	cr, byInfo, err := s.sl.CheckParsed(pt)
 	if err != nil {
 		log.WithField("duration", time.Since(t)).WithError(err).Error("failed to check stoplist")
 		return errors.Wrapf(err, "failed to check stoplist infoHash=%v", hash)
 	}
 	if cr.Found {
 		log.WithField("duration", time.Since(t)).Warnf("found in stoplist %v", cr.String())
-		_, _ = s.refused.Get(s.sl.Version()+hash, func() (bool, error) { return true, nil })
+		// Only an info-dict hit refuses the infohash; a comment or createdBy
+		// hit refuses this file, not the magnet's payload.
+		if byInfo {
+			_, _ = s.refused.Get(s.sl.Version()+hash, func() (bool, error) { return true, nil })
+		}
 		return status.Errorf(codes.PermissionDenied, "found in stoplist infoHash=%v: %s", hash, cr.String())
 	}
 	return nil
