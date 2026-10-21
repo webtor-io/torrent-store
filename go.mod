@@ -11,7 +11,7 @@ require (
 	github.com/urfave/cli v1.22.17
 	github.com/webtor-io/abuse-store v0.0.0-20260807084622-80685fa640e9
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
-	github.com/webtor-io/lazymap v0.0.0-20260807153732-a258d93d42f4
+	github.com/webtor-io/lazymap v0.0.0-20261021184726-55fd9cba3e7a
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
