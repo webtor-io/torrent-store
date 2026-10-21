@@ -68,8 +68,8 @@ func TestPullAfterLoaderPanicDoesNotHang(t *testing.T) {
 	}
 }
 
-// Over the wire: the client gets a one-line error with no stack (source paths
-// stay in), the stack lands in the log, and the retry is served.
+// Over the wire: the client gets a one-line error with no stack and no source
+// paths, the stack lands in the log, and the retry is served.
 func TestLoaderPanicReachesClientWithoutStack(t *testing.T) {
 	p := &panicOnceProvider{fakeProvider: newFakeProvider("mem", true)}
 	raw := makeRawTorrent(t, validInfo())
