@@ -316,8 +316,13 @@ func (s *Server) Fingerprint(ctx context.Context, in *pb.FingerprintRequest) (*p
 // codes.NotFound, an error already carrying a gRPC status (e.g. the
 // stoplist's PermissionDenied surfacing from a build callback) is preserved
 // rather than flattened into Internal, and anything else is logged and
-// wrapped with msg.
+// wrapped with msg. A panic in a lazymap loader arrives here as an error: its
+// stack goes to the log, never into the reply (PanicError.Error carries none).
 func rpcError(err error, hLog *log.Entry, t time.Time, h string, msg string) error {
+	var pe *lazymap.PanicError
+	if errors.As(err, &pe) {
+		hLog = hLog.WithField("stack", string(pe.Stack))
+	}
 	if errors.Is(err, ErrNotFound) {
 		hLog.WithField("duration", time.Since(t)).Info("torrent not found")
 		return status.Errorf(codes.NotFound, "unable to find torrent for infoHash=%v", h)
