@@ -1,29 +1,25 @@
 module github.com/webtor-io/torrent-store
 
-go 1.25.0
+go 1.27
 
 require (
 	github.com/anacrolix/torrent v1.58.1
 	github.com/aws/aws-sdk-go v1.55.8
 	github.com/dgraph-io/badger/v3 v3.2103.5
+	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
 	github.com/pkg/errors v0.9.1
+	github.com/prometheus/client_golang v1.23.2
+	github.com/redis/go-redis/v9 v9.16.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/urfave/cli v1.22.17
+	github.com/wasilibs/go-re2 v1.10.0
 	github.com/webtor-io/abuse-store v0.0.0-20260807084622-80685fa640e9
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
 	github.com/webtor-io/lazymap v0.0.0-20261021184726-55fd9cba3e7a
-	golang.org/x/sys v0.47.0 // indirect
-	google.golang.org/grpc v1.83.2
-	google.golang.org/protobuf v1.36.11
-)
-
-require (
-	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
-	github.com/prometheus/client_golang v1.23.2
-	github.com/redis/go-redis/v9 v9.16.0
-	github.com/wasilibs/go-re2 v1.10.0
 	github.com/webtor-io/stoplist v0.1.0
 	golang.org/x/text v0.41.0
+	google.golang.org/grpc v1.83.2
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -81,6 +77,7 @@ require (
 	golang.org/x/crypto v0.55.0 // indirect
 	golang.org/x/exp v0.0.0-20250718183923-645b1fa84792 // indirect
 	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect
 	mellium.im/sasl v0.3.2 // indirect
