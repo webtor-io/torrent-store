@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"time"
@@ -169,8 +170,35 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	}
 
 	payload := in.GetTorrent()
-	existing, err := s.s.pull(ctx, infoHash, 0)
+	private := pt.info.Private != nil && *pt.info.Private
+	if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
+		var buf bytes.Buffer
+		if err := mi.Write(&buf); err != nil {
+			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to drop default trackers")
+			return nil, errors.Wrapf(err, "failed to drop default trackers infoHash=%v", infoHash)
+		}
+		payload = buf.Bytes()
+		hLog.Info("dropped default trackers from private torrent")
+	}
+	var existing []byte
+	if private {
+		// Keep-first has to see the copy every pod shares: a pod-local L1
+		// can still hold a trackerless copy, and the miss rate limiter
+		// answers ErrNotFound — either would let this push write blind.
+		// ponytail: two first pushes racing on different pods can leave
+		// tiers holding different uploads; a conditional S3 PUT would close
+		// it if two users ever hit the same new private infohash at once.
+		existing, err = s.s.pullDurable(ctx, infoHash)
+	} else {
+		existing, err = s.s.pull(ctx, infoHash, 0)
+	}
 	if err != nil && !errors.Is(err, ErrNotFound) {
+		if private {
+			// A blind write would replace the first uploader's trackers,
+			// or erase them, which is what mergeTorrent keeps from happening.
+			hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to read existing private torrent; refusing to push")
+			return nil, status.Errorf(codes.Unavailable, "failed to read existing torrent infoHash=%v: %v", infoHash, err)
+		}
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to read existing for merge; pushing as-is")
 	} else if err == nil {
 		merged, changed, mErr := mergeTorrent(existing, payload, s.defaultTrackers)

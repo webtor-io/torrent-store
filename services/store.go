@@ -187,6 +187,16 @@ func (s *Store) pull(ctx context.Context, h string, start int) (torrent []byte, 
 	return
 }
 
+// pullDurable reads h from the last tier only: push writes it first and
+// every pod shares it, so neither a stale upper copy nor the miss rate
+// limiter can hide what is stored. No cache, no backfill.
+func (s *Store) pullDurable(ctx context.Context, h string) ([]byte, error) {
+	if len(s.providers) == 0 {
+		return nil, ErrNotFound
+	}
+	return s.providers[len(s.providers)-1].Pull(ctx, h)
+}
+
 func (s *Store) Pull(ctx context.Context, h string) ([]byte, error) {
 	return s.pullm.Get(h, func() ([]byte, error) {
 		return s.pull(ctx, h, 0)
