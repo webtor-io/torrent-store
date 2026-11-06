@@ -65,6 +65,13 @@ const (
 	// exceptLogRunes caps the normalised string echoed in the
 	// "excepted" log line.
 	exceptLogRunes = 200
+
+	// stoplistInputRev is hashed into Version together with the rule
+	// file. Bump it whenever getData or normalize changes what gets
+	// screened: Files serves any manifest stamped with the current
+	// version without screening it again, so a code-only change would
+	// otherwise never reach torrents whose manifest is already cached.
+	stoplistInputRev = "input-v2\x00"
 )
 
 var (
@@ -123,9 +130,10 @@ type Stoplist struct {
 	// source text (for the log line). Empty when the rule file has no
 	// except section — then cc is nil and the except layer is inert.
 	except []exceptRule
-	// version identifies the rule file this Stoplist was built from (first
-	// 16 hex of its sha256). Cached manifests carry it as a stamp, so a
-	// stoplist change invalidates them on the next read.
+	// version identifies the rule file this Stoplist was built from and
+	// the input revision (first 16 hex of sha256(stoplistInputRev+file)).
+	// Cached manifests carry it as a stamp, so a stoplist change
+	// invalidates them on the next read.
 	version string
 	// cc is a second rule tree built from the same YAML with main:
 	// reduced to its composite lines (line 0 dropped). Consulted only
@@ -161,7 +169,7 @@ func NewStoplist(c *cli.Context) (*Stoplist, error) {
 // malformed block rule — the service must not start on a rule file it
 // cannot honour.
 func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
-	sum := sha256.Sum256(raw)
+	sum := sha256.Sum256(append([]byte(stoplistInputRev), raw...))
 	version := hex.EncodeToString(sum[:])[:manifestStampLen]
 	sections := map[string][]string{}
 	if err := yaml.Unmarshal(raw, sections); err != nil {
@@ -233,15 +241,18 @@ func compileExcept(items []string) ([]exceptRule, error) {
 // info dict (name, file paths), which the infohash pins; the rest (comment,
 // createdBy) belong to this file only: magnet2torrent's payload for the same
 // infohash carries its own constant pair.
+//
+// Name and every path are screened in both forms, legacy and .utf-8. Files
+// lists the .utf-8 one when it is non-empty (buildManifestParsed), and legacy
+// encoders put GBK or Shift-JIS mojibake in the legacy field: screening only
+// that let two age composites through in October 2026.
+// An empty path.utf-8 decodes as a non-nil empty slice, so Files then lists
+// the legacy path; screening both covers that too.
 func (s *Stoplist) getData(pt *parsedTorrent) (data []string, n int) {
 	mi, i := pt.mi, &pt.info
-	data = append(data, i.Name)
+	data = appendBoth(data, i.Name, i.NameUtf8)
 	for _, file := range i.Files {
-		path := file.PathUtf8
-		if path == nil {
-			path = file.Path
-		}
-		data = append(data, strings.Join(path, " "))
+		data = appendBoth(data, strings.Join(file.Path, " "), strings.Join(file.PathUtf8, " "))
 	}
 	n = len(data)
 	// Comment + creator — CSAM-distribution torrents often have
@@ -266,6 +277,16 @@ func (s *Stoplist) getData(pt *parsedTorrent) (data []string, n int) {
 		data = append(data, mi.CreatedBy)
 	}
 	return data, n
+}
+
+// appendBoth appends a legacy field and its .utf-8 twin, the twin only when
+// it is set and says something else.
+func appendBoth(data []string, legacy, twin string) []string {
+	data = append(data, legacy)
+	if twin != "" && twin != legacy {
+		data = append(data, twin)
+	}
+	return data
 }
 
 // truncateRunes returns the first `max` runes of s. Used to cap
@@ -498,8 +519,8 @@ func (s *Stoplist) normalize(str string) string {
 	return str
 }
 
-// Version identifies the rule file (16 hex of its sha256); "" when no
-// stoplist is configured.
+// Version identifies the rule file and stoplistInputRev (16 hex of their
+// sha256); "" when no stoplist is configured.
 func (s *Stoplist) Version() string {
 	if s == nil {
 		return ""
