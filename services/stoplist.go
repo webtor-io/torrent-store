@@ -42,18 +42,20 @@ const maxCommentRunes = 300
 // Rule-file layout (YAML, one list of lexemes per key):
 //
 //	<section>: [...]   vocabulary sections referenced from main as {section}
-//	main:      [...]   ordered block rules; line 0 MUST be the direct-block
-//	                   "{stopwords}" line, the rest are composites
+//	main:      [...]   ordered block rules, first match wins; line 0 is the
+//	                   only one except can discharge. The canonical file
+//	                   puts the ambiguous direct-block words there and the
+//	                   hard ones on a later line; composites in between
 //	except:    [...]   optional; /regex/ lexemes only, handled by this
 //	                   service, never passed to the rule library
 //
-// `except` is a negative-context allowlist for the direct-block line
+// `except` is a negative-context allowlist for main line 0
 // only. RE2 has no lookahead, so a stopword sitting next to a track
 // number, an episode number or a codec tag cannot be carved out inside
 // the rule itself; instead, when line 0 fires and any except regex
 // matches the SAME normalised string, that hit is discarded and the
-// string is re-checked against the composite lines alone. Composite
-// hits are never excepted.
+// string is re-checked against every main line after line 0. Hits on
+// those lines are never excepted.
 const (
 	stoplistMainKey   = "main"
 	stoplistExceptKey = "except"
@@ -101,7 +103,7 @@ var (
 	// human-readable Prometheus label. Index order MUST match the
 	// `main:` list in helmfile/values/torrent-store/stoplist.yaml.
 	mainRuleLabels = []string{
-		"stopwords",  // line 0: {stopwords}
+		"stopwords",  // line 0: the except-able direct-block line
 		"age_sexual", // line 1: {age}+{sexual}
 		"age_name",   // line 2: {age}+{name}
 	}
@@ -136,8 +138,9 @@ type Stoplist struct {
 	// invalidates them on the next read.
 	version string
 	// cc is a second rule tree built from the same YAML with main:
-	// reduced to its composite lines (line 0 dropped). Consulted only
-	// after an except regex discarded a stopwords hit.
+	// reduced to every line after line 0 (composites and later
+	// direct-block lines alike). Consulted only after an except regex
+	// discarded a line 0 hit.
 	cc sl.Checker
 	// mainLines is len(main:) of the full tree; needed because the
 	// library only prefixes "line index N" when a line rule has more
