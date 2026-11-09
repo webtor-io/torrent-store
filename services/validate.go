@@ -35,7 +35,8 @@ func ValidateInfoGeometry(info *metainfo.Info) error {
 		return fmt.Errorf("pieces length %d is not a multiple of 20", len(info.Pieces))
 	}
 	var total int64
-	for i, f := range info.UpvertedV1Files() {
+	i := 0
+	for f := range info.UpvertedV1Files() {
 		if f.Length < 0 {
 			return fmt.Errorf("file %d has negative length %d", i, f.Length)
 		}
@@ -44,6 +45,7 @@ func ValidateInfoGeometry(info *metainfo.Info) error {
 		if total < prev {
 			return fmt.Errorf("total file length overflows int64")
 		}
+		i++
 	}
 	numPieces := int64(len(info.Pieces) / 20)
 	lastPieceLength := total - (numPieces-1)*info.PieceLength
