@@ -216,7 +216,7 @@ func handledTotal(t *testing.T, method string, code codes.Code) float64 {
 func pushSeries() map[string]float64 {
 	out := map[string]float64{}
 	for _, private := range []bool{false, true} {
-		for _, o := range []string{pushStored, pushMerged, pushKept, pushBlind, pushRefused, pushMalformed, pushError} {
+		for _, o := range []string{pushStored, pushMerged, pushKept, pushHeld, pushBlind, pushRefused, pushMalformed, pushError} {
 			p := strconv.FormatBool(private)
 			out[p+"/"+o] = testutil.ToFloat64(pushTotal.WithLabelValues(p, o))
 		}
@@ -313,10 +313,34 @@ func TestPushOutcomesCounted(t *testing.T) {
 			pushed(t, srv, makeTorrent(t, trackerA, nil, nil, false))
 			return srv, makeTorrent(t, trackerA, nil, nil, false)
 		}},
-		{"private, keep-first", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
+		{"private, same upload again", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
+			return srv, makeTorrent(t, passkeyA, nil, nil, true)
+		}},
+		{"private, trackerless push of stored copy", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
+			return srv, makeTorrent(t, "", nil, nil, true)
+		}},
+		{"private, keep-first holds another upload", true, pushHeld, codes.OK, func(t *testing.T) (*Server, []byte) {
 			srv, _ := mem(nil)
 			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
 			return srv, makeTorrent(t, passkeyB, nil, nil, true)
+		}},
+		// A copy stored before Push dropped default trackers is rewritten
+		// without them; whether the upload was thrown away decides the outcome.
+		{"private, same upload, stored copy cleaned", true, pushMerged, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, p := mem([]string{openTracker})
+			raw := makeTorrent(t, passkeyA, nil, nil, true)
+			p.torrents[infoHashOf(t, raw)] = makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)
+			return srv, raw
+		}},
+		{"private, another upload, stored copy cleaned", true, pushHeld, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, p := mem([]string{openTracker})
+			raw := makeTorrent(t, passkeyB, nil, nil, true)
+			p.torrents[infoHashOf(t, raw)] = makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)
+			return srv, raw
 		}},
 		{"public, stored copy unreadable", false, pushBlind, codes.OK, func(t *testing.T) (*Server, []byte) {
 			p := &failingPullProvider{newFakeProvider("mem", true)}

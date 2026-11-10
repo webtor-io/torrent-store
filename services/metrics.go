@@ -30,15 +30,24 @@ const (
 	manifestRebuilt = "rebuilt" // a tier held one, the caller rejected it (stale stamp)
 )
 
-// Push outcomes, see Server.Push. Under private="true", kept is keep-first
-// holding the first upload's trackers, and merged is a stored copy cleaned of
-// default trackers or adopting an upload's because it had none. blind is the
-// write mergeTorrent exists to prevent for a private torrent.
+// Push outcomes, see Server.Push. Under private="true", kept is a push that
+// changed nothing and lost nothing: the copy already has every tracker it
+// names (the same torrent again, or a bare magnet resolved with none), while
+// held is keep-first throwing away trackers a different upload carried.
+// merged is a stored copy cleaned of default trackers or adopting an
+// upload's because it had none. blind is the write mergeTorrent exists to
+// prevent for a private torrent.
+//
+// "Write requested" is all the metric can say: Store.Push goes through pushm,
+// which shares one in-flight write per infohash and answers a repeat from
+// cache for five minutes, so a requested write can be coalesced into another
+// push's or skipped. These count requests, not provider writes.
 const (
-	pushStored    = "stored"    // no stored copy found; the incoming torrent was written
-	pushMerged    = "merged"    // the merge changed the stored copy; the merged torrent was written
-	pushKept      = "kept"      // the merge left the stored copy as it was; nothing written
-	pushBlind     = "blind"     // the stored copy could not be read or merged; incoming written as-is
+	pushStored    = "stored"    // no stored copy found; a write of the incoming torrent was requested
+	pushMerged    = "merged"    // the merge changed the stored copy and discarded nothing; a write was requested
+	pushKept      = "kept"      // the stored copy stays as it was and nothing incoming was discarded; no write
+	pushHeld      = "held"      // private only: incoming trackers the copy lacks were discarded; a write only if the copy was cleaned
+	pushBlind     = "blind"     // the stored copy could not be read or merged; a write of the incoming torrent as-is was requested
 	pushRefused   = "refused"   // PermissionDenied: stoplist, infohash or payload ban
 	pushMalformed = "malformed" // InvalidArgument: info dict failed geometry validation
 	pushError     = outcomeError
@@ -93,7 +102,7 @@ var (
 	// not counted; it shows in grpc_server_handled_total as InvalidArgument.
 	pushTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "torrent_store_push_total",
-		Help: "Push calls whose torrent parsed, by private flag and outcome (stored, merged, kept, blind, refused, malformed, error).",
+		Help: "Push calls whose torrent parsed, by private flag and outcome (stored, merged, kept, held, blind, refused, malformed, error).",
 	}, []string{"private", "outcome"})
 )
 

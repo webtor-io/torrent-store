@@ -25,15 +25,18 @@ import (
 //
 // Returns merged bytes and changed=true only when announce-list or url-list
 // actually grew, or a private copy was cleaned or adopted trackers. If nothing
-// changed, returns existing as-is.
-func mergeTorrent(existing, incoming []byte, defaultTrackers []string) ([]byte, bool, error) {
+// changed, returns existing as-is. held reports that keep-first threw away a
+// tracker or webseed incoming named and the private copy does not: another
+// upload's, not a re-push of the same torrent or a trackerless one. It is set
+// whether or not the copy was also cleaned, and never for a public torrent.
+func mergeTorrent(existing, incoming []byte, defaultTrackers []string) ([]byte, bool, bool, error) {
 	exMi, err := metainfo.Load(bytes.NewReader(existing))
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	inMi, err := metainfo.Load(bytes.NewReader(incoming))
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 
 	private := false
@@ -50,16 +53,20 @@ func mergeTorrent(existing, incoming []byte, defaultTrackers []string) ([]byte, 
 		// counting them would lock such a copy out of its real trackers.
 		// Push has already dropped them from incoming.
 		cleaned := dropTrackers(exMi, defaultTrackers)
+		held := false
 		if !hasTrackers(exMi) && hasTrackers(inMi) {
 			exMi.Announce, exMi.AnnounceList, exMi.UrlList = inMi.Announce, inMi.AnnounceList, inMi.UrlList
-		} else if !cleaned {
-			return existing, false, nil
+		} else {
+			held = discards(exMi, inMi)
+			if !cleaned {
+				return existing, false, held, nil
+			}
 		}
 		var buf bytes.Buffer
 		if err := exMi.Write(&buf); err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
-		return buf.Bytes(), true, nil
+		return buf.Bytes(), true, held, nil
 	}
 
 	merged := exMi.UpvertedAnnounceList()
@@ -114,7 +121,7 @@ func mergeTorrent(existing, incoming []byte, defaultTrackers []string) ([]byte, 
 	}
 
 	if !changed {
-		return existing, false, nil
+		return existing, false, false, nil
 	}
 
 	exMi.AnnounceList = merged
@@ -125,9 +132,9 @@ func mergeTorrent(existing, incoming []byte, defaultTrackers []string) ([]byte, 
 
 	var buf bytes.Buffer
 	if err := exMi.Write(&buf); err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
-	return buf.Bytes(), true, nil
+	return buf.Bytes(), true, false, nil
 }
 
 // hasTrackers reports whether mi names any tracker or webseed.
@@ -136,6 +143,23 @@ func hasTrackers(mi *metainfo.MetaInfo) bool {
 	return mi.Announce != "" ||
 		slices.ContainsFunc(mi.AnnounceList, func(tier []string) bool { return slices.ContainsFunc(tier, nonEmpty) }) ||
 		slices.ContainsFunc(mi.UrlList, nonEmpty)
+}
+
+// discards reports whether in names a tracker or webseed that kept does not,
+// so keeping kept as it is throws that URL away.
+func discards(kept, in *metainfo.MetaInfo) bool {
+	have := trackerURLs(kept)
+	return slices.ContainsFunc(trackerURLs(in), func(u string) bool { return !slices.Contains(have, u) })
+}
+
+// trackerURLs lists every non-empty URL mi names in announce, announce-list
+// and url-list, the same fields hasTrackers looks at.
+func trackerURLs(mi *metainfo.MetaInfo) []string {
+	urls := append([]string{mi.Announce}, mi.UrlList...)
+	for _, tier := range mi.AnnounceList {
+		urls = append(urls, tier...)
+	}
+	return slices.DeleteFunc(urls, func(u string) bool { return u == "" })
 }
 
 // dropTrackers removes the given URLs from mi's announce and announce-list
