@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"testing"
 
+	"github.com/anacrolix/torrent/metainfo"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	pb "github.com/webtor-io/torrent-store/proto"
@@ -208,4 +210,192 @@ func handledTotal(t *testing.T, method string, code codes.Code) float64 {
 		}
 	}
 	return 0
+}
+
+// pushSeries reads every series Push can move, keyed "private/outcome".
+func pushSeries() map[string]float64 {
+	out := map[string]float64{}
+	for _, private := range []bool{false, true} {
+		for _, o := range []string{pushStored, pushMerged, pushKept, pushBlind, pushRefused, pushMalformed, pushError} {
+			p := strconv.FormatBool(private)
+			out[p+"/"+o] = testutil.ToFloat64(pushTotal.WithLabelValues(p, o))
+		}
+	}
+	return out
+}
+
+// pushDelta pushes raw once and reports how far each series moved.
+func pushDelta(t *testing.T, srv *Server, raw []byte) (map[string]float64, error) {
+	t.Helper()
+	before := pushSeries()
+	_, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: raw})
+	delta := pushSeries()
+	for k := range delta {
+		delta[k] -= before[k]
+	}
+	return delta, err
+}
+
+func infoHashOf(t *testing.T, raw []byte) string {
+	t.Helper()
+	pt, err := parseTorrent(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pt.mi.HashInfoBytes().HexString()
+}
+
+// abuseDown is an oracle that cannot be reached.
+type abuseDown struct{}
+
+func (abuseDown) Get(context.Context, string) (bool, error) { return false, errors.New("down") }
+func (abuseDown) CheckFingerprint(context.Context, []byte) (bool, error) {
+	return false, errors.New("down")
+}
+
+// Each way Push can end is counted exactly once, under the torrent's private
+// flag and the outcome Push actually reached; no other series moves. The
+// reply code is checked too, so a case that drifts onto another branch fails
+// on the scenario rather than passing on the metric.
+func TestPushOutcomesCounted(t *testing.T) {
+	const trackerA, trackerB = "http://a.invalid/announce", "udp://b.invalid:80/announce"
+	mem := func(defaults []string) (*Server, *fakeProvider) {
+		p := newFakeProvider("mem", true)
+		return NewServer(NewStore([]StoreProvider{p}), nil, nil, defaults), p
+	}
+	pushed := func(t *testing.T, srv *Server, raw []byte) {
+		t.Helper()
+		if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: raw}); err != nil {
+			t.Fatalf("setup push: %v", err)
+		}
+	}
+	// storedUnloadable stores bytes metainfo cannot load under raw's
+	// infohash, so mergeTorrent fails on the stored copy.
+	storedUnloadable := func(t *testing.T, raw []byte) (*Server, []byte) {
+		srv, p := mem(nil)
+		p.torrents[infoHashOf(t, raw)] = []byte("not a torrent")
+		return srv, raw
+	}
+	malformedPrivate := func() metainfo.Info {
+		i, yes := malformedInfo(), true
+		i.Private = &yes
+		return i
+	}
+	cases := []struct {
+		name    string
+		private bool
+		outcome string
+		code    codes.Code
+		// setup returns the server and the torrent whose push is measured;
+		// pushes setup makes itself are not counted against the case.
+		setup func(t *testing.T) (*Server, []byte)
+	}{
+		{"public, nothing stored", false, pushStored, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			return srv, makeTorrent(t, trackerA, nil, nil, false)
+		}},
+		{"private, nothing stored", true, pushStored, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			return srv, makeTorrent(t, passkeyA, nil, nil, true)
+		}},
+		{"public, new tracker merged", false, pushMerged, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			pushed(t, srv, makeTorrent(t, trackerA, nil, nil, false))
+			return srv, makeTorrent(t, trackerA, metainfo.AnnounceList{{trackerA}, {trackerB}}, nil, false)
+		}},
+		{"private, trackerless copy adopts upload", true, pushMerged, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem([]string{openTracker})
+			pushed(t, srv, makeTorrent(t, openTracker, nil, nil, true))
+			return srv, makeTorrent(t, passkeyA, nil, nil, true)
+		}},
+		{"public, nothing new", false, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			pushed(t, srv, makeTorrent(t, trackerA, nil, nil, false))
+			return srv, makeTorrent(t, trackerA, nil, nil, false)
+		}},
+		{"private, keep-first", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
+			return srv, makeTorrent(t, passkeyB, nil, nil, true)
+		}},
+		{"public, stored copy unreadable", false, pushBlind, codes.OK, func(t *testing.T) (*Server, []byte) {
+			p := &failingPullProvider{newFakeProvider("mem", true)}
+			return NewServer(NewStore([]StoreProvider{p}), nil, nil, nil), makeTorrent(t, trackerA, nil, nil, false)
+		}},
+		{"public, stored copy unmergeable", false, pushBlind, codes.OK, func(t *testing.T) (*Server, []byte) {
+			return storedUnloadable(t, makeTorrent(t, trackerA, nil, nil, false))
+		}},
+		{"private, stored copy unmergeable", true, pushBlind, codes.OK, func(t *testing.T) (*Server, []byte) {
+			return storedUnloadable(t, makeTorrent(t, passkeyA, nil, nil, true))
+		}},
+		{"public, stoplist", false, pushRefused, codes.PermissionDenied, func(t *testing.T) (*Server, []byte) {
+			info := validInfo()
+			info.Name = "foo bar"
+			return NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, mustStoplist(t, noExceptFixture), nil), makeRawTorrent(t, info)
+		}},
+		{"private, infohash banned", true, pushRefused, codes.PermissionDenied, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			raw := makeTorrent(t, passkeyA, nil, nil, true)
+			srv.a = &fakeAbuse{byHash: map[string]bool{infoHashOf(t, raw): true}}
+			return srv, raw
+		}},
+		{"public, payload banned", false, pushRefused, codes.PermissionDenied, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			raw := makeRawTorrent(t, validInfo())
+			srv.a = &fakeAbuse{byHash: map[string]bool{}, byDigest: map[string]bool{digestOf(t, raw): true}}
+			return srv, raw
+		}},
+		{"public, bad geometry", false, pushMalformed, codes.InvalidArgument, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			return srv, makeRawTorrent(t, malformedInfo())
+		}},
+		{"private, bad geometry", true, pushMalformed, codes.InvalidArgument, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			return srv, makeRawTorrent(t, malformedPrivate())
+		}},
+		{"public, store write failed", false, pushError, codes.Unknown, func(t *testing.T) (*Server, []byte) {
+			p := &failingPushProvider{fakeProvider: newFakeProvider("mem", true), pushErr: errors.New("down")}
+			return NewServer(NewStore([]StoreProvider{p}), nil, nil, nil), makeTorrent(t, trackerA, nil, nil, false)
+		}},
+		{"private, stored copy unreadable", true, pushError, codes.Unavailable, func(t *testing.T) (*Server, []byte) {
+			p := &failingPullProvider{newFakeProvider("mem", true)}
+			return NewServer(NewStore([]StoreProvider{p}), nil, nil, nil), makeTorrent(t, passkeyA, nil, nil, true)
+		}},
+		{"private, abuse lookup failed", true, pushError, codes.Unknown, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			srv.a = abuseDown{}
+			return srv, makeTorrent(t, passkeyA, nil, nil, true)
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, raw := c.setup(t)
+			delta, err := pushDelta(t, srv, raw)
+			if status.Code(err) != c.code {
+				t.Fatalf("Push code = %v (err %v), want %v", status.Code(err), err, c.code)
+			}
+			want := strconv.FormatBool(c.private) + "/" + c.outcome
+			for k, d := range delta {
+				if k == want && d != 1 || k != want && d != 0 {
+					t.Errorf("%s delta = %v, want %v", k, d, map[bool]int{true: 1, false: 0}[k == want])
+				}
+			}
+		})
+	}
+}
+
+// A torrent that does not parse has no private flag to label it with, so it
+// is left to grpc_server_handled_total{grpc_code="InvalidArgument"} rather
+// than counted under a guess.
+func TestPushUnparsableNotCounted(t *testing.T) {
+	srv := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, nil, nil)
+	delta, err := pushDelta(t, srv, []byte("not a torrent"))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Push code = %v, want InvalidArgument", status.Code(err))
+	}
+	for k, d := range delta {
+		if d != 0 {
+			t.Errorf("%s delta = %v, want 0", k, d)
+		}
+	}
 }

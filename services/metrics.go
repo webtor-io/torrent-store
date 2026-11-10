@@ -3,11 +3,14 @@ package services
 import (
 	"context"
 	"errors"
+	"strconv"
 	"time"
 
 	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Backend op outcomes. not_found is the normal answer from an upper tier
@@ -25,6 +28,20 @@ const (
 	manifestHit     = "hit"     // a tier held a manifest and the caller accepted it
 	manifestBuilt   = "built"   // no tier held one; built from the .torrent
 	manifestRebuilt = "rebuilt" // a tier held one, the caller rejected it (stale stamp)
+)
+
+// Push outcomes, see Server.Push. Under private="true", kept is keep-first
+// holding the first upload's trackers, and merged is a stored copy cleaned of
+// default trackers or adopting an upload's because it had none. blind is the
+// write mergeTorrent exists to prevent for a private torrent.
+const (
+	pushStored    = "stored"    // no stored copy found; the incoming torrent was written
+	pushMerged    = "merged"    // the merge changed the stored copy; the merged torrent was written
+	pushKept      = "kept"      // the merge left the stored copy as it was; nothing written
+	pushBlind     = "blind"     // the stored copy could not be read or merged; incoming written as-is
+	pushRefused   = "refused"   // PermissionDenied: stoplist, infohash or payload ban
+	pushMalformed = "malformed" // InvalidArgument: info dict failed geometry validation
+	pushError     = outcomeError
 )
 
 var (
@@ -70,6 +87,14 @@ var (
 		Name: "torrent_store_manifest_total",
 		Help: "Manifest cache results at the tier layer: hit, built (miss), rebuilt (cached blob rejected).",
 	}, []string{"result"})
+
+	// pushTotal counts Push calls by the BEP-27 private flag and what Push
+	// did with the torrent. A torrent that does not parse has no flag and is
+	// not counted; it shows in grpc_server_handled_total as InvalidArgument.
+	pushTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "torrent_store_push_total",
+		Help: "Push calls whose torrent parsed, by private flag and outcome (stored, merged, kept, blind, refused, malformed, error).",
+	}, []string{"private", "outcome"})
 )
 
 func init() {
@@ -87,6 +112,24 @@ func opOutcome(err error) string {
 		return outcomeNotFound
 	}
 	return outcomeError
+}
+
+// countPush records a finished Push. A refusal or a failure overrides the
+// write outcome Push had reached, and is read off the code the caller gets,
+// so refused matches grpc_server_handled_total{grpc_method="Push"} for
+// PermissionDenied, and malformed matches it for InvalidArgument less the
+// torrents that did not parse.
+func countPush(private bool, outcome string, err error) {
+	switch status.Code(err) {
+	case codes.OK:
+	case codes.PermissionDenied:
+		outcome = pushRefused
+	case codes.InvalidArgument:
+		outcome = pushMalformed
+	default:
+		outcome = pushError
+	}
+	pushTotal.WithLabelValues(strconv.FormatBool(private), outcome).Inc()
 }
 
 // meteredProvider is a StoreProvider that records every call into the one
