@@ -84,7 +84,10 @@ func TestPrivateAccessFailsClosed(t *testing.T) {
 		return err
 	}
 	before := accessCount("uid", "unreadable")
-	other, _ := privaterecord.Seal(privaterecord.Vector.Key, strings.Repeat("ab", 20), uidB, [][]string{{trB}})
+	other, err := privaterecord.Seal(privaterecord.Vector.Key, strings.Repeat("ab", 20), uidB, [][]string{{trB}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	seed(t, obj, h, uidB, other)
 	wantRefusal(t, pull(&pb.Caller{Uid: uidB}), codes.PermissionDenied, "no_record")
 	if accessCount("uid", "unreadable")-before != 1 {
@@ -125,5 +128,28 @@ func TestPrivateAccessCounted(t *testing.T) {
 		if accessCount(c.class, c.outcome)-before != 1 {
 			t.Fatalf("%s/%s not counted", c.class, c.outcome)
 		}
+	}
+}
+
+// Touch with an internal Caller, or without one in observation, reads no
+// manifest: stored bytes the manifest build cannot parse still answer OK. A
+// uid Caller reads it, so the same bytes fail.
+func TestTouchManifestSkipped(t *testing.T) {
+	srv, p, _ := privateServer(t, false)
+	h := strings.Repeat("cd", 20)
+	if _, err := p.Push(ctx, h, []byte("torrent")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		caller *pb.Caller
+		access string
+	}{{&pb.Caller{Internal: true}, "allowed"}, {nil, ""}} {
+		touch, err := srv.Touch(ctx, &pb.TouchRequest{InfoHash: h, Caller: c.caller})
+		if err != nil || touch.GetAccess() != c.access {
+			t.Fatalf("Touch(%v) = %q, %v; want %q", c.caller, touch.GetAccess(), err, c.access)
+		}
+	}
+	if _, err := srv.Touch(ctx, &pb.TouchRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidA}}); err == nil {
+		t.Fatal("Touch with a uid answered without reading the manifest")
 	}
 }

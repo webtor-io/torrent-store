@@ -471,13 +471,14 @@ func rpcError(err error, hLog *log.Entry, t time.Time, h string, msg string) err
 	return errors.Wrapf(err, "%s infoHash=%v", msg, h)
 }
 
-// Touch runs no abuse gate at all — see the matrix in abuse_gate.go: it only
+// Touch runs no abuse gate on its own — see the matrix in abuse_gate.go: it
 // refreshes the storage TTL, and serving is gated at Pull/Files. It refuses a
 // torrent that is not stored because the stoplist refused it under the current
 // rules: answering NotFound there sends the caller to resolve the magnet again
 // only to be refused at Push. And it decides access to a private torrent as
 // Pull does, reading private from the manifest (whose build applies the
-// stoplist), so a caller learns its answer before it plays.
+// stoplist), so a caller learns its answer before it plays; a banned hash is
+// refused there before the record is read.
 func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
@@ -505,6 +506,10 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 			return nil, err
 		}
 		if m.GetPrivate() {
+			// A banned hash is refused before its record is read (S9).
+			if err = s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
+				return nil, err
+			}
 			if err = s.access(ctx, infoHash, c); err != nil {
 				return nil, err
 			}

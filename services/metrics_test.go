@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/anacrolix/torrent/metainfo"
@@ -17,6 +19,34 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
+
+// bornAtZero is checked before any test runs: the series an alert or a phase
+// gate reads exist at 0 from the start (S10), so increase() sees the first event.
+var bornAtZero error
+
+func TestMain(m *testing.M) {
+	bornAtZero = errors.Join(
+		testutil.CollectAndCompare(privateAccessTotal, strings.NewReader(`
+# HELP torrent_store_private_access_total Access decisions on private torrents by caller class and outcome.
+# TYPE torrent_store_private_access_total counter
+torrent_store_private_access_total{caller="legacy",outcome="allowed"} 0
+torrent_store_private_access_total{caller="legacy",outcome="sign_in"} 0
+torrent_store_private_access_total{caller="uid",outcome="unreadable"} 0
+`)),
+		testutil.CollectAndCompare(pushTotal, strings.NewReader(`
+# HELP torrent_store_push_total Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, held, stripped, blind, refused, malformed, error).
+# TYPE torrent_store_push_total counter
+torrent_store_push_total{outcome="stripped",private="true"} 0
+`)),
+	)
+	os.Exit(m.Run())
+}
+
+func TestSeriesBornAtZero(t *testing.T) {
+	if bornAtZero != nil {
+		t.Fatal(bornAtZero)
+	}
+}
 
 func TestOpOutcome(t *testing.T) {
 	cases := []struct {

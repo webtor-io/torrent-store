@@ -33,10 +33,23 @@ func TestAbuseGateMatrix(t *testing.T) {
 		if _, err := srv.Fingerprint(context.Background(), &pb.FingerprintRequest{InfoHash: h}); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("Fingerprint: code = %v, want PermissionDenied", status.Code(err))
 		}
-		// Touch is ungated by design: it only refreshes the storage TTL, and
-		// serving is gated at Pull/Files.
+		// Touch without a Caller is ungated by design: it only refreshes the
+		// storage TTL, and serving is gated at Pull/Files.
 		if _, err := srv.Touch(context.Background(), &pb.TouchRequest{InfoHash: h}); err != nil {
 			t.Fatalf("Touch must stay ungated, got %v", err)
+		}
+	})
+
+	// S9: a banned hash is refused before its private record is read.
+	t.Run("banned private infohash, Touch with a uid", func(t *testing.T) {
+		srv, p, obj := privateServer(t, false)
+		h := seedPrivate(t, srv, p, true)
+		srv.a = &fakeAbuse{byHash: map[string]bool{h: true}}
+		reads := obj.count("get", "private/")
+		_, err := srv.Touch(context.Background(), &pb.TouchRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidA}})
+		wantRefusal(t, err, codes.PermissionDenied, "")
+		if obj.count("get", "private/") != reads {
+			t.Fatal("record of a banned hash was read")
 		}
 	})
 
