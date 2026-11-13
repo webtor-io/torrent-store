@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"unicode/utf8"
 
 	"golang.org/x/net/publicsuffix"
 )
@@ -28,11 +29,16 @@ var (
 	ErrTooManyTrackers = errors.New("privaterecord: more than 32 trackers")
 )
 
-// usableURL reports whether raw is an http, https or udp URL with a host and
-// returns the host as Hosts lists it: lower case, one trailing dot dropped, an
-// IP literal in its canonical form, otherwise the registrable domain (eTLD+1),
-// or the host itself when it is a public suffix or a single label.
+// usableURL reports whether raw is a valid UTF-8 http, https or udp URL with a
+// host and returns the host as Hosts lists it: lower case, one trailing dot
+// dropped, an IP literal in its canonical form, otherwise the registrable
+// domain (eTLD+1), or the host itself when it is its own public suffix
+// (co.uk, localhost). Invalid UTF-8 is refused because Canonical would turn it
+// into U+FFFD, and a host with an empty label because it would reach Hosts whole.
 func usableURL(raw string) (host string, ok bool) {
+	if !utf8.ValidString(raw) {
+		return "", false
+	}
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", false
@@ -57,7 +63,13 @@ func usableURL(raw string) (host string, ok bool) {
 	if d, err := publicsuffix.EffectiveTLDPlusOne(h); err == nil {
 		return d, true
 	}
-	return h, true
+	// eTLD+1 also fails on an empty label (a..b, .a, a.), where h still has
+	// the subdomain. A leading dot is checked apart: the PSL wildcard of a
+	// TLD like *.ck makes .ck its own public suffix.
+	if ps, _ := publicsuffix.PublicSuffix(h); ps == h && !strings.HasPrefix(h, ".") {
+		return h, true
+	}
+	return "", false
 }
 
 // Normalize trims every URL, drops empty, duplicate (across tiers too),
