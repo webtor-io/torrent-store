@@ -108,6 +108,14 @@ var (
 		Help: "Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, held, stripped, blind, refused, malformed, error).",
 	}, []string{"private", "outcome"})
 
+	// privateAccessTotal counts Server.access: caller legacy (no Caller),
+	// internal or uid. A malformed uid or hash is refused before it and
+	// not counted.
+	privateAccessTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "torrent_store_private_access_total",
+		Help: "Access decisions on private torrents by caller class and outcome.",
+	}, []string{"caller", "outcome"})
+
 	privateEnforce = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "torrent_store_private_enforce",
 		Help: "1 when PRIVATE_ACCESS_ENFORCE is on.",
@@ -120,6 +128,10 @@ func init() {
 	prometheus.MustRegister(grpcMetrics)
 	// Phase 3 is judged on stripped private pushes: the series exists at 0.
 	pushTotal.WithLabelValues("true", pushStripped)
+	// Read by the phase gates (legacy) and PrivateRecordsBad (unreadable).
+	privateAccessTotal.WithLabelValues("legacy", "allowed")
+	privateAccessTotal.WithLabelValues("legacy", "sign_in")
+	privateAccessTotal.WithLabelValues("uid", "unreadable")
 }
 
 // opOutcome maps a provider call result onto a metric label.

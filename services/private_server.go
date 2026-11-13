@@ -180,6 +180,48 @@ func unavailable(err error) error {
 	return status.Error(codes.Unavailable, "private records: S3 request failed")
 }
 
+// access decides whether caller c may read private torrent h. nil means allowed.
+// Called only for private torrents. Without a Caller the call came from an old
+// caller: allowed until enforce. An S3 error is Unavailable, never no_record.
+func (s *Server) access(ctx context.Context, h string, c *pb.Caller) error {
+	count := func(caller, outcome string) { privateAccessTotal.WithLabelValues(caller, outcome).Inc() }
+	switch {
+	case c == nil && !s.enforce:
+		count("legacy", "allowed")
+		return nil
+	case c == nil:
+		count("legacy", "sign_in")
+		return refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)
+	case c.GetInternal():
+		count("internal", "allowed")
+		return nil
+	case !s.p.Available():
+		count("uid", "disabled")
+		return refusal(codes.FailedPrecondition, reasonUnavailable, msgUnavailable)
+	case c.GetUid() == "":
+		count("uid", "sign_in")
+		return refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)
+	}
+	h = strings.ToLower(h)
+	if err := s.recordsReady(h, c.GetUid()); err != nil {
+		return err
+	}
+	_, _, err := s.p.open(ctx, h, c.GetUid())
+	switch {
+	case errors.Is(err, ErrNotFound):
+		count("uid", "no_record")
+		return refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
+	case errors.Is(err, errUnreadable):
+		count("uid", "unreadable")
+		return refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
+	case err != nil:
+		count("uid", "unavailable")
+		return unavailable(err)
+	}
+	count("uid", "allowed")
+	return nil
+}
+
 func (s *Server) GetPrivateRecord(ctx context.Context, in *pb.GetPrivateRecordRequest) (*pb.GetPrivateRecordReply, error) {
 	h, uid := strings.ToLower(in.GetInfoHash()), in.GetUid()
 	if err := s.recordsReady(h, uid); err != nil {

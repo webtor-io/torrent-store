@@ -130,6 +130,18 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	if err = s.gatePayload(ctx, in.GetInfoHash(), pt, hLog, t); err != nil {
 		return nil, err
 	}
+	if pt.info.Private != nil && *pt.info.Private {
+		if err = s.access(ctx, in.GetInfoHash(), in.GetCaller()); err != nil {
+			return nil, err
+		}
+		// Under enforce a copy stored by keep-first before records existed
+		// still names the first uploader's trackers: they never leave by Pull.
+		if s.enforce {
+			if torrent, err = infoOnly(pt.mi); err != nil {
+				return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", in.GetInfoHash())
+			}
+		}
+	}
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
 	return &pb.PullReply{Torrent: []byte(torrent)}, nil
 }
@@ -343,7 +355,26 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	if err := s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
 		return nil, err
 	}
+	reply, err := s.manifest(ctx, infoHash, hLog, t)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.gatePayload(ctx, infoHash, nil, hLog, t); err != nil {
+		return nil, err
+	}
+	// On every call, cache hits included: the manifest is shared, access is per caller.
+	if reply.GetPrivate() {
+		if err = s.access(ctx, infoHash, in.GetCaller()); err != nil {
+			return nil, err
+		}
+	}
+	hLog.WithField("files", len(reply.GetFiles())).WithField("duration", time.Since(t)).Info("sending files response")
+	return reply, nil
+}
 
+// manifest is Files' cached-manifest fetch (stamp, ManifestIf, unmarshal) without the abuse gates;
+// Touch reads private from it.
+func (s *Server) manifest(ctx context.Context, infoHash string, hLog *log.Entry, t time.Time) (*pb.FilesReply, error) {
 	// The stoplist is enforced at build time, when the torrent bytes are in
 	// hand, so the cached manifest is stamped with the stoplist version and
 	// a blob built under another version is rebuilt: 7 of the top-25
@@ -372,18 +403,11 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	if err != nil {
 		return nil, rpcError(err, hLog, t, infoHash, "failed to get manifest")
 	}
-	manifest = manifest[manifestStampLen:]
-
-	if err = s.gatePayload(ctx, infoHash, nil, hLog, t); err != nil {
-		return nil, err
-	}
-
 	reply := &pb.FilesReply{}
-	if err = proto.Unmarshal(manifest, reply); err != nil {
+	if err = proto.Unmarshal(manifest[manifestStampLen:], reply); err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal manifest")
 		return nil, errors.Wrapf(err, "failed to unmarshal manifest infoHash=%v", infoHash)
 	}
-	hLog.WithField("files", len(reply.GetFiles())).WithField("duration", time.Since(t)).Info("sending files response")
 	return reply, nil
 }
 
@@ -448,10 +472,12 @@ func rpcError(err error, hLog *log.Entry, t time.Time, h string, msg string) err
 }
 
 // Touch runs no abuse gate at all — see the matrix in abuse_gate.go: it only
-// refreshes the storage TTL, and serving is gated at Pull/Files. The one
-// refusal it gives is for a torrent that is not stored because the stoplist
-// refused it under the current rules: answering NotFound there sends the
-// caller to resolve the magnet again only to be refused at Push.
+// refreshes the storage TTL, and serving is gated at Pull/Files. It refuses a
+// torrent that is not stored because the stoplist refused it under the current
+// rules: answering NotFound there sends the caller to resolve the magnet again
+// only to be refused at Push. And it decides access to a private torrent as
+// Pull does, reading private from the manifest (whose build applies the
+// stoplist), so a caller learns its answer before it plays.
 func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
@@ -469,6 +495,25 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 		return nil, rpcError(err, hLog, t, infoHash, "failed to touch torrent")
 	}
 
+	// internal is always allowed and a call without Caller is until enforce:
+	// neither reads the manifest, so both stay as cheap as before.
+	c := in.GetCaller()
+	reply := &pb.TouchReply{}
+	if !c.GetInternal() && (c != nil || s.enforce) {
+		m, err := s.manifest(ctx, infoHash, hLog, t)
+		if err != nil {
+			return nil, err
+		}
+		if m.GetPrivate() {
+			if err = s.access(ctx, infoHash, c); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if c != nil {
+		reply.Access = "allowed"
+	}
+
 	hLog.WithField("duration", time.Since(t)).Info("sending touch reply")
-	return &pb.TouchReply{}, nil
+	return reply, nil
 }
