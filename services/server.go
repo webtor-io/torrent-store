@@ -247,6 +247,12 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 // stamping existed) fails the check like any other stale one.
 const manifestStampLen = 16
 
+// manifestFormat prefixes the stoplist version in the stamp, so a manifest
+// cached in an older format (before FilesReply.private) is rebuilt. The stamp
+// stays 16 wide: the version loses its last 2 hex chars, and the 'm' keeps
+// the result apart from any bare hex stamp.
+const manifestFormat = "m2"
+
 // manifestStamp pads or truncates a stoplist version to the stamp width; an
 // empty version (no stoplist configured) stamps as zeros.
 func manifestStamp(version string) string {
@@ -277,7 +283,7 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	// hand, so the cached manifest is stamped with the stoplist version and
 	// a blob built under another version is rebuilt: 7 of the top-25
 	// stoplisted hashes were still being listed from cache on 2026-09-19.
-	stamp := manifestStamp(s.sl.Version())
+	stamp := manifestStamp(manifestFormat + s.sl.Version())
 	manifest, err := s.s.ManifestIf(ctx, infoHash, func(blob []byte) bool {
 		return hasManifestStamp(blob, stamp)
 	}, func(torrent []byte) ([]byte, error) {

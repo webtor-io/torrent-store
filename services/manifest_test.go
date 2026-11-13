@@ -347,3 +347,34 @@ func TestStoplistVersionTracksRuleFile(t *testing.T) {
 		t.Fatalf("nil stoplist must stamp as zeros")
 	}
 }
+
+func TestBuildManifestReportsPrivate(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		m, err := buildManifest(makeTorrent(t, "", nil, nil, private))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Private == nil || m.GetPrivate() != private {
+			t.Fatalf("private=%v: manifest Private = %v", private, m.Private)
+		}
+	}
+}
+
+// A manifest cached before FilesReply.private existed has no flag and the old
+// stamp; Files must rebuild it rather than serve a manifest without private.
+func TestFilesRebuildsManifestWithoutPrivate(t *testing.T) {
+	p := newFakeProvider("mem", true)
+	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, nil)
+	raw := makeTorrent(t, "", nil, nil, true)
+	h := infoHashOf(t, raw)
+	p.torrents[h] = raw
+	old, _ := proto.Marshal(&pb.FilesReply{Name: "test"})
+	p.manifests[h] = append([]byte(manifestStamp("")), old...) // the stamp Files wrote before this change, no stoplist
+	r, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h})
+	if err != nil || r.Private == nil || !r.GetPrivate() {
+		t.Fatalf("Files = %v, %v; want Private=true", r, err)
+	}
+	if hasManifestStamp(p.manifests[h], manifestStamp("")) {
+		t.Fatal("the pre-change blob was not replaced")
+	}
+}
