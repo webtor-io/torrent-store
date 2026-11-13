@@ -48,7 +48,9 @@ func usableURL(raw string) (host string, ok bool) {
 	if h == "" {
 		return "", false
 	}
-	// IP first: EffectiveTLDPlusOne fails on an IPv4 literal.
+	// IP first: EffectiveTLDPlusOne leaves an IP literal alone only through
+	// an undocumented check in PublicSuffix (without it 192.0.2.1 would come
+	// out as 2.1), and addr.String() gives an IPv6 literal one spelling.
 	if addr, err := netip.ParseAddr(h); err == nil {
 		return addr.String(), true
 	}
