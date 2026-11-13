@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/webtor-io/torrent-store/privaterecord"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // privateServer: one fake tier, DEFAULT_TRACKERS = [openTracker], records in obj.
@@ -308,6 +310,74 @@ func TestPushRecordLogLine(t *testing.T) {
 	}
 	if lines[2].Data["dry_run"] != true || lines[2].Data["outcome"] != "unchanged" {
 		t.Fatalf("dry_run line = %v", lines[2].Data)
+	}
+}
+
+// recordLine is the one private_record_saved line since the last call; it resets hook.
+func recordLine(t *testing.T, hook *logtest.Hook) *logrus.Entry {
+	t.Helper()
+	defer hook.Reset()
+	var line *logrus.Entry
+	for _, e := range hook.AllEntries() {
+		if e.Data["event"] == "private_record_saved" {
+			if line != nil {
+				t.Fatal("two private_record_saved lines")
+			}
+			line = e
+		}
+	}
+	if line == nil {
+		t.Fatal("no private_record_saved line")
+	}
+	return line
+}
+
+// raw is untrusted before Normalize: hosts stays bounded however long or many
+// the URLs, and a source the push was refused for is not echoed.
+func TestPushRecordLogLineBounded(t *testing.T) {
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	srv, _, _ := privateServer(t, false)
+
+	long := "http://" + strings.Repeat("a", 3000) + ".example/announce"
+	_, _ = pushAs(srv, privateTorrent(t, []string{long}), &pb.Caller{Uid: uidA}, nil)
+	l := recordLine(t, hook)
+	if h := l.Data["hosts"].(string); l.Data["reason"] != "private_no_tracker" || len(h) > maxLogHosts+len("…") || !strings.HasSuffix(h, "…") {
+		t.Fatalf("long host: reason %v, hosts %d bytes", l.Data["reason"], len(h))
+	}
+
+	many := make([][]string, 100)
+	for i := range many {
+		many[i] = []string{fmt.Sprintf("http://t%d.example/announce", i)}
+	}
+	_, _ = pushAs(srv, privateTorrent(t, many...), &pb.Caller{Uid: uidA}, nil)
+	l = recordLine(t, hook)
+	if h := strings.Split(l.Data["hosts"].(string), ","); l.Data["reason"] != "private_too_many_trackers" || len(h) != maxLogURLs || h[0] != "t0.example" || l.Data["urls"] != 100 {
+		t.Fatalf("100 hosts: %v", l.Data)
+	}
+
+	_, _ = pushAs(srv, privateTorrent(t, []string{trA}), &pb.Caller{Uid: uidA}, func(r *pb.PushRequest) { r.Source = "http://tracker.example/" })
+	if l = recordLine(t, hook); l.Data["source"] != "invalid" || l.Data["reason"] != "invalidargument" {
+		t.Fatalf("bad source: %v", l.Data)
+	}
+}
+
+// The record fails after the copy was written: Unavailable, a Warn line with
+// outcome failed, and the info-only copy stays; a retry writes the record.
+func TestPushRecordFailsAfterCopy(t *testing.T) {
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	srv, p, obj := privateServer(t, false)
+	obj.failOn("get", "private/", errors.New("down"))
+	raw := privateTorrent(t, []string{trA})
+	if _, err := pushAs(srv, raw, &pb.Caller{Uid: uidA}, nil); status.Code(err) != codes.Unavailable {
+		t.Fatalf("push err = %v, want Unavailable", err)
+	}
+	if l := recordLine(t, hook); l.Level != logrus.WarnLevel || l.Data["outcome"] != "failed" || l.Data["reason"] != "unavailable" {
+		t.Fatalf("line %v: %v", l.Level, l.Data)
+	}
+	if announce, _ := parseAnnounce(t, p.torrents[infoHashOf(t, raw)]); len(announce) != 0 {
+		t.Fatalf("copy announce = %v, want info-only", announce)
 	}
 }
 

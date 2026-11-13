@@ -101,14 +101,42 @@ func (s *Server) recordTiers(c *pb.Caller, source string, raw [][]string) ([][]s
 	return tiers, err
 }
 
+// Bounds of the hosts field. raw is untrusted and not yet normalized, so
+// neither the 32-URL nor the 2048-byte cap applies, and a Push may be
+// grpcMaxMsgSize: unbounded, one crafted upload would be a multi-MB log line.
+// Hosts sees the first maxLogURLs URLs, one past what a record holds; a field
+// longer than maxLogHosts bytes is cut and ends in "…". urls counts them all.
+const (
+	maxLogURLs  = 33
+	maxLogHosts = 2048
+)
+
+func logHosts(raw [][]string) string {
+	var first []string
+	for _, t := range raw {
+		if len(first) == maxLogURLs {
+			break
+		}
+		first = append(first, t[:min(len(t), maxLogURLs-len(first))]...)
+	}
+	hosts := strings.Join(privaterecord.Hosts([][]string{first}), ",")
+	if len(hosts) > maxLogHosts {
+		hosts = strings.ToValidUTF8(hosts[:maxLogHosts], "") + "…"
+	}
+	return hosts
+}
+
 // logRecordPush writes the one private_record_saved line of a private Push
 // with Caller. raw is announceTiers before Normalize, so a refusal has hosts
 // and urls too: that is how the real maxima get measured. The uid is logged
-// only as acct, a URL never.
+// only as acct, a URL never, and a source not in sources as "invalid".
 func logRecordPush(h, uid, source string, raw [][]string, dry bool, outcome string, err error) {
 	urls := 0
 	for _, t := range raw {
 		urls += len(t)
+	}
+	if !slices.Contains(sources, source) {
+		source = "invalid"
 	}
 	f := log.Fields{
 		"event":    "private_record_saved",
@@ -116,7 +144,7 @@ func logRecordPush(h, uid, source string, raw [][]string, dry bool, outcome stri
 		"infohash": h,
 		"source":   source,
 		"outcome":  outcome,
-		"hosts":    strings.Join(privaterecord.Hosts(raw), ","),
+		"hosts":    logHosts(raw),
 		"urls":     urls,
 	}
 	if dry {
