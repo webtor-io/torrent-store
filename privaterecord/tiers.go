@@ -76,7 +76,8 @@ func usableURL(raw string) (host string, ok bool) {
 // Normalize trims every URL, drops empty, duplicate (across tiers too),
 // unusable and over-long URLs and the tiers left empty, keeping order and the
 // URL text. It fails when nothing usable is left or more than 32 distinct URLs
-// are.
+// are; the input is untrusted (a Push may carry 50 MiB of URLs), so the walk
+// stops at the 33rd.
 func Normalize(tiers [][]string) ([][]string, error) {
 	var out [][]string
 	seen := map[string]bool{}
@@ -91,17 +92,17 @@ func Normalize(tiers [][]string) ([][]string, error) {
 				continue
 			}
 			seen[s] = true
+			if len(seen) > maxTrackers {
+				return nil, ErrTooManyTrackers
+			}
 			kept = append(kept, s)
 		}
 		if len(kept) > 0 {
 			out = append(out, kept)
 		}
 	}
-	switch {
-	case len(seen) == 0:
+	if len(seen) == 0 {
 		return nil, ErrNoTracker
-	case len(seen) > maxTrackers:
-		return nil, ErrTooManyTrackers
 	}
 	return out, nil
 }

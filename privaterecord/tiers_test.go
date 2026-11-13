@@ -52,6 +52,15 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
+// Past the 33rd distinct URL nothing is parsed: without the stop, every one
+// of these URLs costs a url.Parse and a map entry.
+func TestNormalizeStopsPastTheCap(t *testing.T) {
+	big := tiersOf(100000)
+	if a := testing.AllocsPerRun(1, func() { _, _ = Normalize(big) }); a > 1000 {
+		t.Fatalf("Normalize made %v allocations on 100000 URLs, want it to stop at the 33rd", a)
+	}
+}
+
 func TestCanonicalKeepsURLBytes(t *testing.T) {
 	got := string(Canonical([][]string{{"https://tracker.example/a?x=<0>&y=0"}, {"udp://tracker.example:1/b"}}))
 	want := `{"v":1,"t":[["https://tracker.example/a?x=<0>&y=0"],["udp://tracker.example:1/b"]]}`
