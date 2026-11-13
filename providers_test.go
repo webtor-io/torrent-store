@@ -51,6 +51,9 @@ func TestPrivateRecordsFromFlags(t *testing.T) {
 			if err != nil && strings.Contains(err.Error(), cur) {
 				t.Fatal("FATAL text carries the key")
 			}
+			if err != nil && !strings.Contains(err.Error(), "PRIVATE_TRACKERS_KEY") {
+				t.Fatalf("FATAL text %q does not name the variable", err)
+			}
 		})
 	}
 }
