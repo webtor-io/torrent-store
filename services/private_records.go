@@ -10,9 +10,38 @@ import (
 	"time"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
 	"github.com/webtor-io/torrent-store/privaterecord"
 	pb "github.com/webtor-io/torrent-store/proto"
 )
+
+const (
+	PrivateTrackersKeyFlag         = "private-trackers-key"
+	PrivateTrackersKeyPreviousFlag = "private-trackers-key-previous"
+	PrivateAccessEnforceFlag       = "private-access-enforce"
+)
+
+// RegisterPrivateFlags adds the record keys and the enforce switch. The keys
+// are parsed by privaterecord.ParseKeys; a bad one stops the start.
+func RegisterPrivateFlags(f []cli.Flag) []cli.Flag {
+	return append(f,
+		cli.StringFlag{
+			Name:   PrivateTrackersKeyFlag,
+			Usage:  "64 hex characters: the key private tracker records are sealed with; unset turns private records off",
+			EnvVar: "PRIVATE_TRACKERS_KEY",
+		},
+		cli.StringFlag{
+			Name:   PrivateTrackersKeyPreviousFlag,
+			Usage:  "64 hex characters: the key before the last rotation, still accepted to open records",
+			EnvVar: "PRIVATE_TRACKERS_KEY_PREVIOUS",
+		},
+		cli.BoolFlag{
+			Name:   PrivateAccessEnforceFlag,
+			Usage:  "refuse private torrents to callers without a Caller and strip their trackers on every Push",
+			EnvVar: "PRIVATE_ACCESS_ENFORCE",
+		},
+	)
+}
 
 // RecordObjects is the S3 bucket as private records see it: one object per key,
 // no tiers, no caches. *providers.S3 is the implementation; tests use memory.

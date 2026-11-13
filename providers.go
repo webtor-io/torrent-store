@@ -1,10 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/urfave/cli"
 	cs "github.com/webtor-io/common-services"
+	"github.com/webtor-io/torrent-store/privaterecord"
 	s "github.com/webtor-io/torrent-store/services"
 	p "github.com/webtor-io/torrent-store/services/providers"
 )
@@ -34,4 +36,22 @@ func sharedProviders(c *cli.Context, httpCl *http.Client) ([]s.StoreProvider, fu
 	}
 
 	return providers, func() { redisCl.Close() }
+}
+
+// privateRecords parses the key flags (an error is FATAL: serve returns it) and
+// finds the S3 provider among shared; no S3 provider means a nil RecordObjects.
+// shared never holds a nil *p.S3, so obj is a true nil interface without S3,
+// never a typed nil that would look available.
+func privateRecords(c *cli.Context, shared []s.StoreProvider) (*s.PrivateRecords, error) {
+	keys, err := privaterecord.ParseKeys(c.String(s.PrivateTrackersKeyFlag), c.String(s.PrivateTrackersKeyPreviousFlag))
+	if err != nil {
+		return nil, fmt.Errorf("PRIVATE_TRACKERS_KEY: %w", err)
+	}
+	var obj s.RecordObjects
+	for _, sp := range shared {
+		if s3, ok := sp.(*p.S3); ok {
+			obj = s3
+		}
+	}
+	return s.NewPrivateRecords(obj, keys), nil
 }
