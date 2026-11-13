@@ -64,6 +64,8 @@ type Server struct {
 	// goes back to magnet2torrent (19% of its requests in October 2026).
 	// ponytail: per pod, a repeat landing on another pod resolves once more.
 	refused *lazymap.LazyMap[bool]
+	p       *PrivateRecords // nil until SetPrivate: private records unavailable
+	enforce bool            // PRIVATE_ACCESS_ENFORCE
 }
 
 func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Server {
@@ -83,6 +85,18 @@ func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Serv
 		srv.a = a
 	}
 	return srv
+}
+
+// SetPrivate gives the server its private records and the enforce mode.
+// NewServer stays as it was: a server never given records has none
+// available, and Available is false on the nil it keeps.
+func (s *Server) SetPrivate(r *PrivateRecords, enforce bool) {
+	s.p, s.enforce = r, enforce
+	v := 0.0
+	if enforce {
+		v = 1
+	}
+	privateEnforce.Set(v)
 }
 
 func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, error) {

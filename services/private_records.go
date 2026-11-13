@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/webtor-io/torrent-store/privaterecord"
+	pb "github.com/webtor-io/torrent-store/proto"
 )
 
 // RecordObjects is the S3 bucket as private records see it: one object per key,
@@ -135,4 +137,59 @@ func (r *PrivateRecords) open(ctx context.Context, h, uid string) (*record, [][]
 func unreadable(h, uid, class string) error {
 	log.WithFields(log.Fields{"infohash": h, "acct": privaterecord.Acct(uid), "class": class}).Warn("private record unreadable")
 	return fmt.Errorf("%w: %s", errUnreadable, class)
+}
+
+// list reads every record of uid without opening one: hosts, source and the
+// times are plain JSON. A record gone between LIST and GET is skipped, one whose
+// JSON does not decode is listed by its hash alone, and any S3 error fails the
+// whole call: an export is never silently partial.
+func (r *PrivateRecords) list(ctx context.Context, uid string) ([]*pb.PrivateRecordInfo, error) {
+	keys, err := r.obj.ListObjects(ctx, userPrefix(uid))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*pb.PrivateRecordInfo, 0, len(keys))
+	for _, k := range keys {
+		body, err := r.obj.GetObject(ctx, k)
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		info := &pb.PrivateRecordInfo{InfoHash: strings.TrimPrefix(k, userPrefix(uid))}
+		var rec record
+		if json.Unmarshal(body, &rec) == nil {
+			info.Hosts, info.Source = rec.Hosts, rec.Source
+			info.CreatedAt, info.UpdatedAt = rec.CreatedAt.Unix(), rec.UpdatedAt.Unix()
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// delete reports whether the record was there. GET, not HEAD, keeps
+// RecordObjects at four methods.
+func (r *PrivateRecords) delete(ctx context.Context, h, uid string) (bool, error) {
+	if _, err := r.obj.GetObject(ctx, recordKey(uid, h)); errors.Is(err, ErrNotFound) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, r.obj.DeleteObject(ctx, recordKey(uid, h))
+}
+
+// deleteByUser deletes every record of uid and returns how many. On an error
+// some may be gone already; a retry deletes the rest.
+func (r *PrivateRecords) deleteByUser(ctx context.Context, uid string) (int32, error) {
+	keys, err := r.obj.ListObjects(ctx, userPrefix(uid))
+	if err != nil {
+		return 0, err
+	}
+	for i, k := range keys {
+		if err := r.obj.DeleteObject(ctx, k); err != nil {
+			return int32(i), err
+		}
+	}
+	return int32(len(keys)), nil
 }

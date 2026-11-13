@@ -104,6 +104,11 @@ var (
 		Name: "torrent_store_push_total",
 		Help: "Push calls whose torrent parsed, by private flag and outcome (stored, merged, kept, held, blind, refused, malformed, error).",
 	}, []string{"private", "outcome"})
+
+	privateEnforce = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "torrent_store_private_enforce",
+		Help: "1 when PRIVATE_ACCESS_ENFORCE is on.",
+	})
 )
 
 func init() {
