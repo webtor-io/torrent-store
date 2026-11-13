@@ -64,7 +64,13 @@ func TestSealIsRandomAndOpens(t *testing.T) {
 }
 
 func TestOpenRefusesOtherPair(t *testing.T) {
-	blob, _ := Seal(testKey, testHash, testUID, Vector.Tiers)
+	blob, err := Seal(testKey, testHash, testUID, Vector.Tiers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open([][]byte{testKey}, testHash, testUID, blob); err != nil {
+		t.Fatalf("own pair: %v", err)
+	}
 	other := strings.Repeat("ab", 20)
 	if _, err := Open([][]byte{testKey}, other, testUID, blob); !errors.Is(err, ErrBadRecord) {
 		t.Fatalf("other hash: %v, want ErrBadRecord", err)

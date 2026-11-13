@@ -64,7 +64,8 @@ func TestHosts(t *testing.T) {
 	got := Hosts([][]string{
 		{"https://u0000.tracker.example/announce?passkey=00000000", "udp://Tracker.Example.:6969/announce"},
 		{"http://user:pw@a.b.tracker.example:8080/x", "udp://192.0.2.1:6969/a", "udp://[2001:DB8::1]:6969/a",
-			"udp://[2001:db8:0:0:0:0:0:1]:6969/a", "http://other.invalid/a", "http://localhost/a", "http://co.uk/a"},
+			"udp://[2001:db8:0:0:0:0:0:1]:6969/a", "udp://[2001:db8::1%25u00000000000000000000]:6969/a",
+			"http://Other.Invalid./a", "http://localhost/a", "http://co.uk/a"},
 	})
 	want := []string{"tracker.example", "192.0.2.1", "2001:db8::1", "other.invalid", "localhost", "co.uk"}
 	if !reflect.DeepEqual(got, want) {

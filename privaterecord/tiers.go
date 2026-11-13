@@ -56,9 +56,10 @@ func usableURL(raw string) (host string, ok bool) {
 	}
 	// IP first: EffectiveTLDPlusOne leaves an IP literal alone only through
 	// an undocumented check in PublicSuffix (without it 192.0.2.1 would come
-	// out as 2.1), and addr.String() gives an IPv6 literal one spelling.
+	// out as 2.1), and addr.String() gives an IPv6 literal one spelling. The
+	// IPv6 zone is free text from the URL, so it stays out of Hosts.
 	if addr, err := netip.ParseAddr(h); err == nil {
-		return addr.String(), true
+		return addr.WithZone("").String(), true
 	}
 	if d, err := publicsuffix.EffectiveTLDPlusOne(h); err == nil {
 		return d, true
@@ -105,16 +106,19 @@ func Normalize(tiers [][]string) ([][]string, error) {
 	return out, nil
 }
 
+// record is the plaintext shape, written by Canonical and read by Open.
+type record struct {
+	V int        `json:"v"`
+	T [][]string `json:"t"`
+}
+
 // Canonical is the record plaintext for normalized tiers. HTML escaping is off
 // so the URL bytes (&, <, >) are kept as they are.
 func Canonical(tiers [][]string) []byte {
 	var b bytes.Buffer
 	e := json.NewEncoder(&b)
 	e.SetEscapeHTML(false)
-	_ = e.Encode(struct {
-		V int        `json:"v"`
-		T [][]string `json:"t"`
-	}{1, tiers}) // an int and strings always encode
+	_ = e.Encode(record{1, tiers}) // an int and strings always encode
 	return bytes.TrimSuffix(b.Bytes(), []byte("\n"))
 }
 

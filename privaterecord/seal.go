@@ -74,10 +74,7 @@ func Open(keys [][]byte, hash, uid string, blob []byte) ([][]string, error) {
 		if err != nil {
 			continue
 		}
-		var r struct {
-			V int        `json:"v"`
-			T [][]string `json:"t"`
-		}
+		var r record
 		if err := json.Unmarshal(plain, &r); err != nil || r.V != 1 {
 			return nil, ErrBadRecord
 		}
