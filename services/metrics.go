@@ -36,7 +36,9 @@ const (
 // held is keep-first throwing away trackers a different upload carried.
 // merged is a stored copy cleaned of default trackers or adopting an
 // upload's because it had none. blind is the write mergeTorrent exists to
-// prevent for a private torrent.
+// prevent for a private torrent. stripped is a private push that carried
+// announce lists and stored an info-only copy (with a Caller, or without one
+// under enforce); it stands for stored, merged, kept or held, never for blind.
 //
 // "Write requested" is all the metric can say: Store.Push goes through pushm,
 // which shares one in-flight write per infohash and answers a repeat from
@@ -47,9 +49,10 @@ const (
 	pushMerged    = "merged"    // the merge changed the stored copy and discarded nothing; a write was requested
 	pushKept      = "kept"      // the stored copy stays as it was and nothing incoming was discarded; no write
 	pushHeld      = "held"      // private only: incoming trackers the copy lacks were discarded; a write only if the copy was cleaned
+	pushStripped  = "stripped"  // private: announce lists the bytes carried were not stored
 	pushBlind     = "blind"     // the stored copy could not be read or merged; a write of the incoming torrent as-is was requested
-	pushRefused   = "refused"   // PermissionDenied: stoplist, infohash or payload ban
-	pushMalformed = "malformed" // InvalidArgument: info dict failed geometry validation
+	pushRefused   = "refused"   // PermissionDenied, or a refusal carrying ErrorInfo: stoplist, infohash or payload ban, private record checks
+	pushMalformed = "malformed" // InvalidArgument without ErrorInfo: info dict failed geometry validation, or a Caller's uid or source is malformed
 	pushError     = outcomeError
 )
 
@@ -102,7 +105,7 @@ var (
 	// not counted; it shows in grpc_server_handled_total as InvalidArgument.
 	pushTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "torrent_store_push_total",
-		Help: "Push calls whose torrent parsed, by private flag and outcome (stored, merged, kept, held, blind, refused, malformed, error).",
+		Help: "Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, held, stripped, blind, refused, malformed, error).",
 	}, []string{"private", "outcome"})
 
 	privateEnforce = promauto.NewGauge(prometheus.GaugeOpts{
@@ -115,6 +118,8 @@ func init() {
 	// promauto registered the vectors above; the gRPC collector is a plain
 	// Collector and has to be registered by hand.
 	prometheus.MustRegister(grpcMetrics)
+	// Phase 3 is judged on stripped private pushes: the series exists at 0.
+	pushTotal.WithLabelValues("true", pushStripped)
 }
 
 // opOutcome maps a provider call result onto a metric label.
@@ -129,16 +134,18 @@ func opOutcome(err error) string {
 }
 
 // countPush records a finished Push. A refusal or a failure overrides the
-// write outcome Push had reached, and is read off the code the caller gets,
-// so refused matches grpc_server_handled_total{grpc_method="Push"} for
-// PermissionDenied, and malformed matches it for InvalidArgument less the
-// torrents that did not parse.
+// write outcome Push had reached. A refusal carrying our ErrorInfo is refused
+// whatever its code; otherwise the code the caller gets decides. So, dry_run
+// pushes aside (never counted), refused matches
+// grpc_server_handled_total{grpc_method="Push"} for PermissionDenied plus the
+// private refusals, and malformed matches it for InvalidArgument less the
+// private refusals and the torrents that did not parse.
 func countPush(private bool, outcome string, err error) {
-	switch status.Code(err) {
-	case codes.OK:
-	case codes.PermissionDenied:
+	switch {
+	case err == nil:
+	case refusalReason(err) != "", status.Code(err) == codes.PermissionDenied:
 		outcome = pushRefused
-	case codes.InvalidArgument:
+	case status.Code(err) == codes.InvalidArgument:
 		outcome = pushMalformed
 	default:
 		outcome = pushError

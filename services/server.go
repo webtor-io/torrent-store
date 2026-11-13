@@ -166,8 +166,21 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 	hLog := log.WithField("infoHash", infoHash).WithField("method", "push")
 	hLog.Info("push torrent request")
 	private := pt.info.Private != nil && *pt.info.Private
+	// A private Push with a Caller saves the caller's trackers in a record.
+	// raw is taken right after parsing, so the log line has hosts and urls
+	// on a refusal too.
+	c := in.GetCaller()
+	rec := private && c != nil
+	var raw, tiers [][]string
+	recordOutcome := ""
+	if rec {
+		raw = announceTiers(pt.mi, s.defaultTrackers)
+		defer func() { logRecordPush(infoHash, c.GetUid(), in.GetSource(), raw, in.GetDryRun(), recordOutcome, err) }()
+	}
 	outcome := pushStored
-	defer func() { countPush(private, outcome, err) }()
+	if !in.GetDryRun() {
+		defer func() { countPush(private, outcome, err) }()
+	}
 
 	err = s.checkStoplist(pt, hLog, t, infoHash)
 	if err != nil {
@@ -186,8 +199,34 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		return nil, status.Errorf(codes.InvalidArgument, "malformed torrent infoHash=%v: %v", infoHash, err)
 	}
 
+	// dry_run never writes, not even for a public torrent or one without Caller.
+	if in.GetDryRun() && !rec {
+		return &pb.PushReply{InfoHash: infoHash}, nil
+	}
+	if rec {
+		if tiers, err = s.recordTiers(c, in.GetSource(), raw); err != nil {
+			return nil, err
+		}
+		if in.GetDryRun() {
+			if recordOutcome, err = s.p.upsert(ctx, infoHash, c.GetUid(), tiers, in.GetSource(), false); err != nil {
+				return nil, unavailable(err)
+			}
+			return &pb.PushReply{InfoHash: infoHash, RecordOutcome: recordOutcome}, nil
+		}
+	}
+
+	// A private torrent's trackers are never stored in the copy every caller
+	// pulls once they go to a record. Without a Caller the push came from an
+	// old caller: until enforce it keeps today's keep-first, because stripping
+	// would leave a new private hash with neither trackers nor a record.
+	strip := private && (c != nil || s.enforce)
 	payload := in.GetTorrent()
-	if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
+	if strip {
+		if payload, err = infoOnly(pt.mi); err != nil {
+			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to strip trackers")
+			return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", infoHash)
+		}
+	} else if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
 		var buf bytes.Buffer
 		if err := mi.Write(&buf); err != nil {
 			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to drop default trackers")
@@ -197,6 +236,7 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		hLog.Info("dropped default trackers from private torrent")
 	}
 	var existing []byte
+	write := true
 	if private {
 		// Keep-first has to see the copy every pod shares: a pod-local L1
 		// can still hold a trackerless copy, and the miss rate limiter
@@ -223,12 +263,13 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 			hLog.WithField("duration", time.Since(t)).WithError(mErr).Warn("failed to merge; pushing incoming as-is")
 			outcome = pushBlind
 		} else if !changed {
+			// No early return: the copy stays, the record below is still due.
 			hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent already present, no new announces — skipping push")
+			write = false
 			outcome = pushKept
 			if held {
 				outcome = pushHeld
 			}
-			return &pb.PushReply{InfoHash: infoHash}, nil
 		} else {
 			payload = merged
 			outcome = pushMerged
@@ -245,15 +286,25 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		}
 	}
 
-	_, err = s.s.Push(ctx, infoHash, payload)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to push")
-		return nil, errors.Wrapf(err, "failed to push torrent infoHash=%v", infoHash)
+	if write {
+		_, err = s.s.Push(ctx, infoHash, payload)
+		if err != nil {
+			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to push")
+			return nil, errors.Wrapf(err, "failed to push torrent infoHash=%v", infoHash)
+		}
+		s.s.pullm.Drop(infoHash)
+		hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent successfully pushed")
 	}
-	s.s.pullm.Drop(infoHash)
+	if strip && hasTrackers(pt.mi) && outcome != pushBlind {
+		outcome = pushStripped
+	}
 
-	hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent successfully pushed")
-	return &pb.PushReply{InfoHash: infoHash}, nil
+	if rec {
+		if recordOutcome, err = s.p.upsert(ctx, infoHash, c.GetUid(), tiers, in.GetSource(), true); err != nil {
+			return nil, unavailable(err)
+		}
+	}
+	return &pb.PushReply{InfoHash: infoHash, RecordOutcome: recordOutcome}, nil
 }
 
 // manifestStampLen is the fixed prefix a cached manifest carries: the

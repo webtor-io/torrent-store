@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
+	"github.com/webtor-io/torrent-store/privaterecord"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -72,6 +74,70 @@ func (s *Server) recordsReady(ids ...string) error {
 		return refusal(codes.FailedPrecondition, reasonUnavailable, msgUnavailable)
 	}
 	return nil
+}
+
+// sources are the doors a private Push with Caller may name.
+var sources = []string{"site", "rapidapi", "magnet", "vault"}
+
+// recordTiers runs the Caller checks of a private Push and normalizes raw
+// (announceTiers of the torrent) into the tiers its record holds. Internal is
+// not an account: only a uid owns a record.
+func (s *Server) recordTiers(c *pb.Caller, source string, raw [][]string) ([][]string, error) {
+	switch {
+	case !s.p.Available():
+		return nil, refusal(codes.FailedPrecondition, reasonUnavailable, msgUnavailable)
+	case c.GetUid() == "":
+		return nil, refusal(codes.PermissionDenied, reasonNeedsAccount, msgNeedsAccount)
+	case !validID(c.GetUid()) || !slices.Contains(sources, source):
+		return nil, status.Error(codes.InvalidArgument, "uid must be 40 hex digits in lower case, source one of site, rapidapi, magnet, vault")
+	}
+	tiers, err := privaterecord.Normalize(raw)
+	switch {
+	case errors.Is(err, privaterecord.ErrNoTracker):
+		return nil, refusal(codes.InvalidArgument, reasonNoTracker, msgNoTracker)
+	case errors.Is(err, privaterecord.ErrTooManyTrackers):
+		return nil, refusal(codes.InvalidArgument, reasonTooManyTrackers, msgTooManyTrackers)
+	}
+	return tiers, err
+}
+
+// logRecordPush writes the one private_record_saved line of a private Push
+// with Caller. raw is announceTiers before Normalize, so a refusal has hosts
+// and urls too: that is how the real maxima get measured. The uid is logged
+// only as acct, a URL never.
+func logRecordPush(h, uid, source string, raw [][]string, dry bool, outcome string, err error) {
+	urls := 0
+	for _, t := range raw {
+		urls += len(t)
+	}
+	f := log.Fields{
+		"event":    "private_record_saved",
+		"acct":     privaterecord.Acct(uid),
+		"infohash": h,
+		"source":   source,
+		"outcome":  outcome,
+		"hosts":    strings.Join(privaterecord.Hosts(raw), ","),
+		"urls":     urls,
+	}
+	if dry {
+		f["dry_run"] = true
+	}
+	if err != nil {
+		code, reason := status.Code(err), refusalReason(err)
+		f["outcome"] = "failed"
+		if reason != "" || code == codes.PermissionDenied || code == codes.InvalidArgument {
+			f["outcome"] = "refused"
+		}
+		if reason == "" {
+			reason = strings.ToLower(code.String())
+		}
+		f["reason"] = reason
+	}
+	if f["outcome"] == "failed" {
+		log.WithFields(f).Warn("private record push")
+		return
+	}
+	log.WithFields(f).Info("private record push")
 }
 
 // unavailable answers an S3 failure. Neither the status nor the log carries

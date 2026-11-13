@@ -216,7 +216,7 @@ func handledTotal(t *testing.T, method string, code codes.Code) float64 {
 func pushSeries() map[string]float64 {
 	out := map[string]float64{}
 	for _, private := range []bool{false, true} {
-		for _, o := range []string{pushStored, pushMerged, pushKept, pushHeld, pushBlind, pushRefused, pushMalformed, pushError} {
+		for _, o := range []string{pushStored, pushMerged, pushKept, pushHeld, pushStripped, pushBlind, pushRefused, pushMalformed, pushError} {
 			p := strconv.FormatBool(private)
 			out[p+"/"+o] = testutil.ToFloat64(pushTotal.WithLabelValues(p, o))
 		}
