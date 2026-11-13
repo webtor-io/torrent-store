@@ -43,14 +43,14 @@ func newTestS3(t *testing.T, h http.HandlerFunc) *S3 {
 
 func TestS3ObjectsMissingIsNotAnError(t *testing.T) {
 	ctx := t.Context()
+	// AWS answers DELETE of a missing key with 204, which the SDK already reads
+	// as success; the stub answers 404 NoSuchKey as some S3-compatible backends do.
 	s := newTestS3(t, func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = io.WriteString(w, `<Error><Code>NoSuchKey</Code><Message>no</Message></Error>`)
-		case http.MethodDelete:
-			w.WriteHeader(http.StatusNoContent)
+		if r.URL.Path != "/torrent-store/private/u/h" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
 		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `<Error><Code>NoSuchKey</Code><Message>no</Message></Error>`)
 	})
 	if _, err := s.GetObject(ctx, "private/u/h"); !errors.Is(err, ss.ErrNotFound) {
 		t.Fatalf("GetObject = %v, want ErrNotFound", err)
@@ -100,5 +100,18 @@ func TestS3ListObjectsFollowsPages(t *testing.T) {
 	got, err := s.ListObjects(ctx, "private/u/")
 	if err != nil || !reflect.DeepEqual(got, []string{"private/u/a", "private/u/b"}) {
 		t.Fatalf("ListObjects = %q, %v", got, err)
+	}
+}
+
+func TestS3PutObjectSendsKeyBodyAndMD5(t *testing.T) {
+	s := newTestS3(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if r.Method != http.MethodPut || r.URL.Path != "/torrent-store/private/u/h" || string(body) != "sealed" ||
+			r.Header.Get("Content-MD5") != "C+rYhIA/6MVkPdoNy5SxvA==" { // base64(md5("sealed"))
+			t.Errorf("unexpected request %s %s body=%q md5=%q", r.Method, r.URL, body, r.Header.Get("Content-MD5"))
+		}
+	})
+	if err := s.PutObject(t.Context(), "private/u/h", []byte("sealed")); err != nil {
+		t.Fatalf("PutObject = %v", err)
 	}
 }
