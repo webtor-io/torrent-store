@@ -3,6 +3,8 @@ package services
 import (
 	"strings"
 
+	"google.golang.org/protobuf/proto"
+
 	pb "github.com/webtor-io/torrent-store/proto"
 )
 
@@ -26,7 +28,7 @@ func buildManifestParsed(pt *parsedTorrent) (*pb.FilesReply, error) {
 		name = info.NameUtf8
 	}
 	name = validUTF8(name)
-	reply := &pb.FilesReply{Name: name}
+	reply := &pb.FilesReply{Name: name, Private: proto.Bool(info.Private != nil && *info.Private)}
 	for _, f := range info.UpvertedFiles() {
 		path := f.Path
 		if len(f.PathUtf8) > 0 {

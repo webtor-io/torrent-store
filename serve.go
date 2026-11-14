@@ -37,6 +37,7 @@ func configureServe(c *cli.Command) {
 	c.Flags = s.RegisterAbuseFlags(c.Flags)
 	c.Flags = s.RegisterStoplistFlags(c.Flags)
 	c.Flags = s.RegisterServerFlags(c.Flags)
+	c.Flags = s.RegisterPrivateFlags(c.Flags)
 }
 
 func serve(c *cli.Context) (err error) {
@@ -95,6 +96,12 @@ func serve(c *cli.Context) (err error) {
 	shared, closeShared := sharedProviders(c, cl)
 	defer closeShared()
 
+	// Setting Private Records — S3 and the key, or off; a bad key stops the start
+	records, err := privateRecords(c, shared)
+	if err != nil {
+		return
+	}
+
 	// Setting Store
 	store := s.NewStore(append([]s.StoreProvider{badger}, shared...))
 
@@ -106,6 +113,7 @@ func serve(c *cli.Context) (err error) {
 
 	// Setting Server
 	server := s.NewServer(store, abuse, stoplist, s.ParseDefaultTrackers(c))
+	server.SetPrivate(records, c.Bool(s.PrivateAccessEnforceFlag))
 
 	// Setting GRPC Server
 	grpcServer := s.NewGRPCServer(c, server)

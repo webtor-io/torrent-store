@@ -80,36 +80,14 @@ func (s *S3) makeAWSMD5(b []byte) *string {
 }
 
 func (s *S3) Push(ctx context.Context, h string, torrent []byte) (ok bool, err error) {
-	cl := s.cl.Get()
-	_, err = cl.PutObjectWithContext(ctx,
-		&s3.PutObjectInput{
-			Bucket:     aws.String(s.bucket),
-			Key:        aws.String(h),
-			Body:       bytes.NewReader(torrent),
-			ContentMD5: s.makeAWSMD5(torrent),
-		})
-	if err != nil {
+	if err := s.PutObject(ctx, h, torrent); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 func (s *S3) Pull(ctx context.Context, h string) (torrent []byte, err error) {
-	cl := s.cl.Get()
-	r, err := cl.GetObjectWithContext(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(h),
-	})
-	if err != nil {
-		if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
-			return nil, ss.ErrNotFound
-		}
-		return nil, err
-	}
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(r.Body)
-	return io.ReadAll(r.Body)
+	return s.GetObject(ctx, h)
 }
 
 // s3DerivedKey namespaces derived blobs with a per-kind suffix so they sit
@@ -133,14 +111,7 @@ func (s *S3) PushDerived(ctx context.Context, kind ss.DerivedKind, h string, blo
 	if err != nil {
 		return false, err
 	}
-	_, err = s.cl.Get().PutObjectWithContext(ctx,
-		&s3.PutObjectInput{
-			Bucket:     aws.String(s.bucket),
-			Key:        aws.String(key),
-			Body:       bytes.NewReader(blob),
-			ContentMD5: s.makeAWSMD5(blob),
-		})
-	if err != nil {
+	if err := s.PutObject(ctx, key, blob); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -151,6 +122,15 @@ func (s *S3) PullDerived(ctx context.Context, kind ss.DerivedKind, h string) (bl
 	if err != nil {
 		return nil, err
 	}
+	return s.GetObject(ctx, key)
+}
+
+// GetObject, PutObject, DeleteObject and ListObjects reach the bucket by raw
+// key, past the store tiers: private records must never land in Badger or Redis.
+// Pull/Push and the derived variants route through GetObject/PutObject, so the
+// NoSuchKey mapping lives in one place.
+
+func (s *S3) GetObject(ctx context.Context, key string) ([]byte, error) {
 	r, err := s.cl.Get().GetObjectWithContext(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
@@ -161,10 +141,49 @@ func (s *S3) PullDerived(ctx context.Context, kind ss.DerivedKind, h string) (bl
 		}
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		_ = Body.Close()
-	}(r.Body)
+	defer func() { _ = r.Body.Close() }()
 	return io.ReadAll(r.Body)
 }
 
+func (s *S3) PutObject(ctx context.Context, key string, body []byte) error {
+	_, err := s.cl.Get().PutObjectWithContext(ctx, &s3.PutObjectInput{
+		Bucket:     aws.String(s.bucket),
+		Key:        aws.String(key),
+		Body:       bytes.NewReader(body),
+		ContentMD5: s.makeAWSMD5(body),
+	})
+	return err
+}
+
+// DeleteObject treats an absent key as success. AWS answers 204 for one, but
+// some S3-compatible backends answer 404 NoSuchKey.
+func (s *S3) DeleteObject(ctx context.Context, key string) error {
+	_, err := s.cl.Get().DeleteObjectWithContext(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if awsErr, ok := err.(awserr.Error); ok && awsErr.Code() == s3.ErrCodeNoSuchKey {
+		return nil
+	}
+	return err
+}
+
+func (s *S3) ListObjects(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	err := s.cl.Get().ListObjectsV2PagesWithContext(ctx, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	}, func(p *s3.ListObjectsV2Output, _ bool) bool {
+		for _, o := range p.Contents {
+			keys = append(keys, aws.StringValue(o.Key))
+		}
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
 var _ ss.StoreProvider = (*S3)(nil)
+var _ ss.RecordObjects = (*S3)(nil)
