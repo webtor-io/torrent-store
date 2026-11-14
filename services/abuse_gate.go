@@ -39,8 +39,12 @@ import (
 //	Fingerprint  yes       no                 consumers are abuse tooling; the
 //	                                          fingerprint of a payload-blocked
 //	                                          torrent is exactly what they ask for
-//	Touch        no        no                 only refreshes storage TTL; serving
-//	                                          is gated at Pull/Files
+//	Touch        private   no                 refreshes storage TTL; serving is
+//	                                          gated at Pull/Files. A Caller that
+//	                                          is not internal reads the manifest
+//	                                          (stoplist applied at its build);
+//	                                          on a private torrent the infoHash
+//	                                          arm runs before the record is read
 //
 // Covered by TestAbuseGateMatrix — an RPC dropping out of its row turns a
 // test red, not an audit finding.

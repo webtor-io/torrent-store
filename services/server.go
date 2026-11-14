@@ -64,6 +64,8 @@ type Server struct {
 	// goes back to magnet2torrent (19% of its requests in October 2026).
 	// ponytail: per pod, a repeat landing on another pod resolves once more.
 	refused *lazymap.LazyMap[bool]
+	p       *PrivateRecords // nil until SetPrivate: private records unavailable
+	enforce bool            // PRIVATE_ACCESS_ENFORCE
 }
 
 func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Server {
@@ -83,6 +85,18 @@ func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Serv
 		srv.a = a
 	}
 	return srv
+}
+
+// SetPrivate gives the server its private records and the enforce mode.
+// NewServer stays as it was: a server never given records has none
+// available, and Available is false on the nil it keeps.
+func (s *Server) SetPrivate(r *PrivateRecords, enforce bool) {
+	s.p, s.enforce = r, enforce
+	v := 0.0
+	if enforce {
+		v = 1
+	}
+	privateEnforce.Set(v)
 }
 
 func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, error) {
@@ -116,8 +130,32 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	if err = s.gatePayload(ctx, in.GetInfoHash(), pt, hLog, t); err != nil {
 		return nil, err
 	}
+	reply := &pb.PullReply{}
+	if pt.info.Private != nil && *pt.info.Private {
+		c := in.GetCaller()
+		tiers, err := s.access(ctx, in.GetInfoHash(), c)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		// Allowed for a uid means by its record: the reply carries that
+		// record's trackers and nothing of the stored copy, enforce or not.
+		case c.GetUid() != "" && !c.GetInternal():
+			if torrent, err = withTiers(pt.mi, tiers); err != nil {
+				return nil, errors.Wrapf(err, "failed to set caller trackers infoHash=%v", in.GetInfoHash())
+			}
+			reply.CallerTrackers = true
+		// Under enforce a copy stored by keep-first before records existed
+		// still names the first uploader's trackers: they never leave by Pull.
+		case s.enforce:
+			if torrent, err = infoOnly(pt.mi); err != nil {
+				return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", in.GetInfoHash())
+			}
+		}
+	}
+	reply.Torrent = torrent
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
-	return &pb.PullReply{Torrent: []byte(torrent)}, nil
+	return reply, nil
 }
 
 func (s *Server) checkStoplist(pt *parsedTorrent, log *log.Entry, t time.Time, hash string) error {
@@ -152,8 +190,21 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 	hLog := log.WithField("infoHash", infoHash).WithField("method", "push")
 	hLog.Info("push torrent request")
 	private := pt.info.Private != nil && *pt.info.Private
+	// A private Push with a Caller saves the caller's trackers in a record.
+	// raw is taken right after parsing, so the log line has hosts and urls
+	// on a refusal too.
+	c := in.GetCaller()
+	rec := private && c != nil
+	var raw, tiers [][]string
+	recordOutcome := ""
+	if rec {
+		raw = announceTiers(pt.mi, s.defaultTrackers)
+		defer func() { logRecordPush(infoHash, c.GetUid(), in.GetSource(), raw, in.GetDryRun(), recordOutcome, err) }()
+	}
 	outcome := pushStored
-	defer func() { countPush(private, outcome, err) }()
+	if !in.GetDryRun() {
+		defer func() { countPush(private, outcome, err) }()
+	}
 
 	err = s.checkStoplist(pt, hLog, t, infoHash)
 	if err != nil {
@@ -172,8 +223,34 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		return nil, status.Errorf(codes.InvalidArgument, "malformed torrent infoHash=%v: %v", infoHash, err)
 	}
 
+	// dry_run never writes, not even for a public torrent or one without Caller.
+	if in.GetDryRun() && !rec {
+		return &pb.PushReply{InfoHash: infoHash}, nil
+	}
+	if rec {
+		if tiers, err = s.recordTiers(c, in.GetSource(), raw); err != nil {
+			return nil, err
+		}
+		if in.GetDryRun() {
+			if recordOutcome, err = s.p.upsert(ctx, infoHash, c.GetUid(), tiers, in.GetSource(), false); err != nil {
+				return nil, unavailable(err)
+			}
+			return &pb.PushReply{InfoHash: infoHash, RecordOutcome: recordOutcome}, nil
+		}
+	}
+
+	// A private torrent's trackers are never stored in the copy every caller
+	// pulls once they go to a record. Without a Caller the push came from an
+	// old caller: until enforce it keeps today's keep-first, because stripping
+	// would leave a new private hash with neither trackers nor a record.
+	strip := private && (c != nil || s.enforce)
 	payload := in.GetTorrent()
-	if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
+	if strip {
+		if payload, err = infoOnly(pt.mi); err != nil {
+			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to strip trackers")
+			return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", infoHash)
+		}
+	} else if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
 		var buf bytes.Buffer
 		if err := mi.Write(&buf); err != nil {
 			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to drop default trackers")
@@ -183,6 +260,7 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		hLog.Info("dropped default trackers from private torrent")
 	}
 	var existing []byte
+	write := true
 	if private {
 		// Keep-first has to see the copy every pod shares: a pod-local L1
 		// can still hold a trackerless copy, and the miss rate limiter
@@ -209,12 +287,13 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 			hLog.WithField("duration", time.Since(t)).WithError(mErr).Warn("failed to merge; pushing incoming as-is")
 			outcome = pushBlind
 		} else if !changed {
+			// No early return: the copy stays, the record below is still due.
 			hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent already present, no new announces — skipping push")
+			write = false
 			outcome = pushKept
 			if held {
 				outcome = pushHeld
 			}
-			return &pb.PushReply{InfoHash: infoHash}, nil
 		} else {
 			payload = merged
 			outcome = pushMerged
@@ -231,21 +310,37 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		}
 	}
 
-	_, err = s.s.Push(ctx, infoHash, payload)
-	if err != nil {
-		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to push")
-		return nil, errors.Wrapf(err, "failed to push torrent infoHash=%v", infoHash)
+	if write {
+		_, err = s.s.Push(ctx, infoHash, payload)
+		if err != nil {
+			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to push")
+			return nil, errors.Wrapf(err, "failed to push torrent infoHash=%v", infoHash)
+		}
+		s.s.pullm.Drop(infoHash)
+		hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent successfully pushed")
 	}
-	s.s.pullm.Drop(infoHash)
+	if strip && hasTrackers(pt.mi) && outcome != pushBlind {
+		outcome = pushStripped
+	}
 
-	hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent successfully pushed")
-	return &pb.PushReply{InfoHash: infoHash}, nil
+	if rec {
+		if recordOutcome, err = s.p.upsert(ctx, infoHash, c.GetUid(), tiers, in.GetSource(), true); err != nil {
+			return nil, unavailable(err)
+		}
+	}
+	return &pb.PushReply{InfoHash: infoHash, RecordOutcome: recordOutcome}, nil
 }
 
 // manifestStampLen is the fixed prefix a cached manifest carries: the
 // stoplist version it was built under. A blob without it (cached before
 // stamping existed) fails the check like any other stale one.
 const manifestStampLen = 16
+
+// manifestFormat prefixes the stoplist version in the stamp, so a manifest
+// cached in an older format (before FilesReply.private) is rebuilt. The stamp
+// stays 16 wide: the version loses its last 2 hex chars, and the 'm' keeps
+// the result apart from any bare hex stamp.
+const manifestFormat = "m2"
 
 // manifestStamp pads or truncates a stoplist version to the stamp width; an
 // empty version (no stoplist configured) stamps as zeros.
@@ -272,12 +367,31 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	if err := s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
 		return nil, err
 	}
+	reply, err := s.manifest(ctx, infoHash, hLog, t)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.gatePayload(ctx, infoHash, nil, hLog, t); err != nil {
+		return nil, err
+	}
+	// On every call, cache hits included: the manifest is shared, access is per caller.
+	if reply.GetPrivate() {
+		if _, err = s.access(ctx, infoHash, in.GetCaller()); err != nil {
+			return nil, err
+		}
+	}
+	hLog.WithField("files", len(reply.GetFiles())).WithField("duration", time.Since(t)).Info("sending files response")
+	return reply, nil
+}
 
+// manifest is Files' cached-manifest fetch (stamp, ManifestIf, unmarshal) without the abuse gates;
+// Touch reads private from it.
+func (s *Server) manifest(ctx context.Context, infoHash string, hLog *log.Entry, t time.Time) (*pb.FilesReply, error) {
 	// The stoplist is enforced at build time, when the torrent bytes are in
 	// hand, so the cached manifest is stamped with the stoplist version and
 	// a blob built under another version is rebuilt: 7 of the top-25
 	// stoplisted hashes were still being listed from cache on 2026-09-19.
-	stamp := manifestStamp(s.sl.Version())
+	stamp := manifestStamp(manifestFormat + s.sl.Version())
 	manifest, err := s.s.ManifestIf(ctx, infoHash, func(blob []byte) bool {
 		return hasManifestStamp(blob, stamp)
 	}, func(torrent []byte) ([]byte, error) {
@@ -301,18 +415,11 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	if err != nil {
 		return nil, rpcError(err, hLog, t, infoHash, "failed to get manifest")
 	}
-	manifest = manifest[manifestStampLen:]
-
-	if err = s.gatePayload(ctx, infoHash, nil, hLog, t); err != nil {
-		return nil, err
-	}
-
 	reply := &pb.FilesReply{}
-	if err = proto.Unmarshal(manifest, reply); err != nil {
+	if err = proto.Unmarshal(manifest[manifestStampLen:], reply); err != nil {
 		hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to unmarshal manifest")
 		return nil, errors.Wrapf(err, "failed to unmarshal manifest infoHash=%v", infoHash)
 	}
-	hLog.WithField("files", len(reply.GetFiles())).WithField("duration", time.Since(t)).Info("sending files response")
 	return reply, nil
 }
 
@@ -376,11 +483,14 @@ func rpcError(err error, hLog *log.Entry, t time.Time, h string, msg string) err
 	return errors.Wrapf(err, "%s infoHash=%v", msg, h)
 }
 
-// Touch runs no abuse gate at all — see the matrix in abuse_gate.go: it only
-// refreshes the storage TTL, and serving is gated at Pull/Files. The one
-// refusal it gives is for a torrent that is not stored because the stoplist
-// refused it under the current rules: answering NotFound there sends the
-// caller to resolve the magnet again only to be refused at Push.
+// Touch runs no abuse gate on its own — see the matrix in abuse_gate.go: it
+// refreshes the storage TTL, and serving is gated at Pull/Files. It refuses a
+// torrent that is not stored because the stoplist refused it under the current
+// rules: answering NotFound there sends the caller to resolve the magnet again
+// only to be refused at Push. And it decides access to a private torrent as
+// Pull does, reading private from the manifest (whose build applies the
+// stoplist), so a caller learns its answer before it plays; a banned hash is
+// refused there before the record is read.
 func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply, error) {
 	t := time.Now()
 	infoHash := in.GetInfoHash()
@@ -398,6 +508,29 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 		return nil, rpcError(err, hLog, t, infoHash, "failed to touch torrent")
 	}
 
+	// internal is always allowed and a call without Caller is until enforce:
+	// neither reads the manifest, so both stay as cheap as before.
+	c := in.GetCaller()
+	reply := &pb.TouchReply{}
+	if !c.GetInternal() && (c != nil || s.enforce) {
+		m, err := s.manifest(ctx, infoHash, hLog, t)
+		if err != nil {
+			return nil, err
+		}
+		if m.GetPrivate() {
+			// A banned hash is refused before its record is read (S9).
+			if err = s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
+				return nil, err
+			}
+			if _, err = s.access(ctx, infoHash, c); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if c != nil {
+		reply.Access = "allowed"
+	}
+
 	hLog.WithField("duration", time.Since(t)).Info("sending touch reply")
-	return &pb.TouchReply{}, nil
+	return reply, nil
 }

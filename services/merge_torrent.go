@@ -195,3 +195,30 @@ func dropTrackers(mi *metainfo.MetaInfo, drop []string) bool {
 	}
 	return dropped
 }
+
+// infoOnly is mi without Announce, AnnounceList and UrlList; InfoBytes, and
+// with them the infohash, are untouched.
+func infoOnly(mi *metainfo.MetaInfo) ([]byte, error) { return withTiers(mi, nil) }
+
+// withTiers is infoOnly with tiers as the announce-list and their first URL
+// as announce: nothing of mi's own trackers or webseeds is left.
+func withTiers(mi *metainfo.MetaInfo, tiers [][]string) ([]byte, error) {
+	c := *mi
+	c.Announce, c.AnnounceList, c.UrlList = "", tiers, nil
+	if len(tiers) > 0 && len(tiers[0]) > 0 {
+		c.Announce = tiers[0][0]
+	}
+	var buf bytes.Buffer
+	if err := c.Write(&buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// announceTiers is what a private record is made of before Normalize: mi's
+// UpvertedAnnounceList without defaults, dropped from a copy so mi is unchanged.
+func announceTiers(mi *metainfo.MetaInfo, defaults []string) [][]string {
+	c := *mi
+	dropTrackers(&c, defaults)
+	return c.UpvertedAnnounceList()
+}
