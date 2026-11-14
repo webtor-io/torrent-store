@@ -17,6 +17,7 @@ require (
 	github.com/webtor-io/common-services v0.0.0-20260323152956-4a4e97f013f7
 	github.com/webtor-io/lazymap v0.0.0-20261021184726-55fd9cba3e7a
 	github.com/webtor-io/stoplist v0.1.0
+	golang.org/x/net v0.60.0
 	golang.org/x/text v0.42.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
@@ -75,7 +76,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
-	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	lukechampine.com/blake3 v1.4.1 // indirect

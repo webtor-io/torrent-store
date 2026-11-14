@@ -141,7 +141,7 @@ func (s *Server) checkStoplist(pt *parsedTorrent, log *log.Entry, t time.Time, h
 	return nil
 }
 
-func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, error) {
+func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply, err error) {
 	t := time.Now()
 	pt, err := parseTorrent(in.GetTorrent())
 	if err != nil {
@@ -151,6 +151,9 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	infoHash := pt.mi.HashInfoBytes().HexString()
 	hLog := log.WithField("infoHash", infoHash).WithField("method", "push")
 	hLog.Info("push torrent request")
+	private := pt.info.Private != nil && *pt.info.Private
+	outcome := pushStored
+	defer func() { countPush(private, outcome, err) }()
 
 	err = s.checkStoplist(pt, hLog, t, infoHash)
 	if err != nil {
@@ -170,7 +173,6 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 	}
 
 	payload := in.GetTorrent()
-	private := pt.info.Private != nil && *pt.info.Private
 	if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
 		var buf bytes.Buffer
 		if err := mi.Write(&buf); err != nil {
@@ -200,15 +202,27 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (*pb.PushReply, e
 			return nil, status.Errorf(codes.Unavailable, "failed to read existing torrent infoHash=%v: %v", infoHash, err)
 		}
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to read existing for merge; pushing as-is")
+		outcome = pushBlind
 	} else if err == nil {
-		merged, changed, mErr := mergeTorrent(existing, payload, s.defaultTrackers)
+		merged, changed, held, mErr := mergeTorrent(existing, payload, s.defaultTrackers)
 		if mErr != nil {
 			hLog.WithField("duration", time.Since(t)).WithError(mErr).Warn("failed to merge; pushing incoming as-is")
+			outcome = pushBlind
 		} else if !changed {
 			hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent already present, no new announces — skipping push")
+			outcome = pushKept
+			if held {
+				outcome = pushHeld
+			}
 			return &pb.PushReply{InfoHash: infoHash}, nil
 		} else {
 			payload = merged
+			outcome = pushMerged
+			if held {
+				// The copy was cleaned of default trackers as well; the
+				// discarded upload is what this push is counted for.
+				outcome = pushHeld
+			}
 			// The payload differs from what pushm may have cached for this
 			// infoHash minutes ago; without the drop the cached `true` would
 			// swallow the write and the merged announces would be lost.
