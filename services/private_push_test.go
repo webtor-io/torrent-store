@@ -120,9 +120,8 @@ func TestPushWithCallerStripsEveryTier(t *testing.T) {
 			t.Fatalf("%s stored announce lists: %v", p.name, announce)
 		}
 	}
-	got, _ := srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: h, Uid: uidA})
-	if len(got.GetTiers()) != 2 || got.GetTiers()[0].GetUrls()[0] != trA || got.GetTiers()[1].GetUrls()[0] != trA2 {
-		t.Fatalf("record tiers = %v, want [[trA] [trA2]] without the default tracker", got.GetTiers())
+	if _, got, err := srv.p.open(ctx, h, uidA); err != nil || !reflect.DeepEqual(got, [][]string{{trA}, {trA2}}) {
+		t.Fatalf("record tiers = %q, %v; want [[trA] [trA2]] without the default tracker", got, err)
 	}
 	if rec := obj.record(t, h, uidA); bytes.Contains(rec.TiersEnc, []byte("tracker.example")) || rec.Source != "site" {
 		t.Fatalf("record = %+v", rec)
@@ -145,8 +144,8 @@ func TestPushSecondUploaderGetsOwnRecord(t *testing.T) {
 			t.Fatalf("push %s = %v, %v; want %s", step.uid, r, err, step.want)
 		}
 	}
-	if got, _ := srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: h, Uid: uidB}); !got.GetFound() || got.GetTiers()[0].GetUrls()[0] != trB {
-		t.Fatalf("second uploader's record = %v", got)
+	if _, got, err := srv.p.open(ctx, h, uidB); err != nil || got[0][0] != trB {
+		t.Fatalf("second uploader's record = %q, %v", got, err)
 	}
 	if obj.count("put", "private/") != 2 {
 		t.Fatalf("record puts = %d, want 2 (the repeat is unchanged)", obj.count("put", "private/"))

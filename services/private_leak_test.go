@@ -26,16 +26,17 @@ func TestNoPlaintextInLogsOrErrors(t *testing.T) {
 	h := infoHashOf(t, raw)
 	var errs []error
 	note := func(_ any, err error) { errs = append(errs, err) }
-	note(pushAs(srv, raw, &pb.Caller{Uid: uidA}, nil))                                   // inserted
-	note(pushAs(srv, privateTorrent(t, []string{trA2}), &pb.Caller{Uid: uidA}, nil))     // updated
-	note(pushAs(srv, raw, &pb.Caller{Uid: uidA}, dry))                                   // dry_run
-	note(srv.Push(ctx, &pb.PushRequest{Torrent: raw}))                                   // stripped
-	note(pushAs(srv, raw, &pb.Caller{}, nil))                                            // needs_account
-	note(pushAs(srv, privateTorrent(t, urlTiers(33)...), &pb.Caller{Uid: uidA}, nil))    // too_many
-	note(pushAs(off, raw, &pb.Caller{Uid: uidA}, nil))                                   // private_unavailable
-	note(srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: h, Uid: uidA})) // found
-	note(srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidB}}))     // no_record
-	note(srv.Files(ctx, &pb.FilesRequest{InfoHash: h}))                                  // sign_in
+	note(pushAs(srv, raw, &pb.Caller{Uid: uidA}, nil))                                // inserted
+	note(pushAs(srv, privateTorrent(t, []string{trA2}), &pb.Caller{Uid: uidA}, nil))  // updated
+	note(pushAs(srv, raw, &pb.Caller{Uid: uidA}, dry))                                // dry_run
+	note(srv.Push(ctx, &pb.PushRequest{Torrent: raw}))                                // stripped
+	note(pushAs(srv, raw, &pb.Caller{}, nil))                                         // needs_account
+	note(pushAs(srv, privateTorrent(t, urlTiers(33)...), &pb.Caller{Uid: uidA}, nil)) // too_many
+	note(pushAs(off, raw, &pb.Caller{Uid: uidA}, nil))                                // private_unavailable
+	found, err := srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidA}})
+	note(found, err)                                                                 // the record's trackers
+	note(srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidB}})) // no_record
+	note(srv.Files(ctx, &pb.FilesRequest{InfoHash: h}))                              // sign_in
 	note(srv.Touch(ctx, &pb.TouchRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidA}}))
 	note(srv.ListPrivateRecords(ctx, &pb.ListPrivateRecordsRequest{Uid: uidA}))
 	other, err := privaterecord.Seal(privaterecord.Vector.Key, strings.Repeat("ab", 20), uidB, [][]string{{trB}})
@@ -43,19 +44,17 @@ func TestNoPlaintextInLogsOrErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	seed(t, obj, h, uidB, other)
-	note(srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: h, Uid: uidB})) // record_unreadable
-	note(srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidB}}))     // unreadable
+	note(srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidB}})) // unreadable
 	// An S3 request error names the object URL, and with it the uid.
 	obj.failOn("get", "private/", fmt.Errorf("RequestError: send request failed caused by: Get \"https://bucket.invalid/%s\": i/o timeout", recordKey(uidA, h)))
-	note(srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: h, Uid: uidA}))
 	note(srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidA}}))
 	note(pushAs(srv, raw, &pb.Caller{Uid: uidA}, nil))
 	obj.failOn("get", "private/", nil)
 	note(srv.DeletePrivateRecordsByUser(ctx, &pb.DeletePrivateRecordsByUserRequest{Uid: uidA}))
 
 	// Each path ran as listed, so the scan below has something to scan.
-	OK, PD, IA, FP, DL, UN := codes.OK, codes.PermissionDenied, codes.InvalidArgument, codes.FailedPrecondition, codes.DataLoss, codes.Unavailable
-	want := []codes.Code{OK, OK, OK, OK, PD, IA, FP, OK, PD, PD, OK, OK, DL, PD, UN, UN, UN, OK}
+	OK, PD, IA, FP, UN := codes.OK, codes.PermissionDenied, codes.InvalidArgument, codes.FailedPrecondition, codes.Unavailable
+	want := []codes.Code{OK, OK, OK, OK, PD, IA, FP, OK, PD, PD, OK, OK, PD, UN, UN, OK}
 	if len(errs) != len(want) {
 		t.Fatalf("%d calls, want %d", len(errs), len(want))
 	}
@@ -63,6 +62,9 @@ func TestNoPlaintextInLogsOrErrors(t *testing.T) {
 		if status.Code(err) != want[i] {
 			t.Fatalf("call %d: %v, want %v", i, err, want[i])
 		}
+	}
+	if !found.GetCallerTrackers() {
+		t.Fatal("Pull with the record's uid came without its trackers")
 	}
 	saved := false
 	for _, e := range hook.AllEntries() {
@@ -90,6 +92,18 @@ func TestNoPlaintextInLogsOrErrors(t *testing.T) {
 		for _, f := range forbidden {
 			if strings.Contains(s, f) {
 				t.Fatalf("%q leaks %q", s, f)
+			}
+		}
+	}
+	// Hosts are logged by private_record_saved alone, never by Pull.
+	for _, e := range hook.AllEntries() {
+		if e.Data["event"] == "private_record_saved" {
+			continue
+		}
+		line, _ := e.String()
+		for _, host := range []string{"tracker.example", "tracker.invalid"} {
+			if strings.Contains(line, host) {
+				t.Fatalf("%q names tracker host %q", line, host)
 			}
 		}
 	}

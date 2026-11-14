@@ -264,12 +264,17 @@ func (x *PullRequest) GetCaller() *Caller {
 	return nil
 }
 
-// The pull response message containing the torrent
+// The pull response message containing the torrent. caller_trackers is true
+// when torrent carries the trackers of Caller.uid's record and none of the
+// stored copy's: such a reply is for that uid only, never cache it by info
+// hash or hand it to another user. false in every other case and from an old
+// store.
 type PullReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Torrent       []byte                 `protobuf:"bytes,1,opt,name=torrent,proto3" json:"torrent,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Torrent        []byte                 `protobuf:"bytes,1,opt,name=torrent,proto3" json:"torrent,omitempty"`
+	CallerTrackers bool                   `protobuf:"varint,2,opt,name=caller_trackers,json=callerTrackers,proto3" json:"caller_trackers,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *PullReply) Reset() {
@@ -307,6 +312,13 @@ func (x *PullReply) GetTorrent() []byte {
 		return x.Torrent
 	}
 	return nil
+}
+
+func (x *PullReply) GetCallerTrackers() bool {
+	if x != nil {
+		return x.CallerTrackers
+	}
+	return false
 }
 
 // The check request message containing the infoHash
@@ -781,156 +793,6 @@ func (x *FingerprintReply) GetLength() int64 {
 	return 0
 }
 
-// One announce tier: its tracker URLs.
-type Tier struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Urls          []string               `protobuf:"bytes,1,rep,name=urls,proto3" json:"urls,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Tier) Reset() {
-	*x = Tier{}
-	mi := &file_proto_torrent_store_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Tier) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Tier) ProtoMessage() {}
-
-func (x *Tier) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Tier.ProtoReflect.Descriptor instead.
-func (*Tier) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *Tier) GetUrls() []string {
-	if x != nil {
-		return x.Urls
-	}
-	return nil
-}
-
-type GetPrivateRecordRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InfoHash      string                 `protobuf:"bytes,1,opt,name=info_hash,json=infoHash,proto3" json:"info_hash,omitempty"`
-	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetPrivateRecordRequest) Reset() {
-	*x = GetPrivateRecordRequest{}
-	mi := &file_proto_torrent_store_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetPrivateRecordRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetPrivateRecordRequest) ProtoMessage() {}
-
-func (x *GetPrivateRecordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetPrivateRecordRequest.ProtoReflect.Descriptor instead.
-func (*GetPrivateRecordRequest) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *GetPrivateRecordRequest) GetInfoHash() string {
-	if x != nil {
-		return x.InfoHash
-	}
-	return ""
-}
-
-func (x *GetPrivateRecordRequest) GetUid() string {
-	if x != nil {
-		return x.Uid
-	}
-	return ""
-}
-
-// tiers are in plaintext.
-type GetPrivateRecordReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	Tiers         []*Tier                `protobuf:"bytes,2,rep,name=tiers,proto3" json:"tiers,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GetPrivateRecordReply) Reset() {
-	*x = GetPrivateRecordReply{}
-	mi := &file_proto_torrent_store_proto_msgTypes[16]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GetPrivateRecordReply) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GetPrivateRecordReply) ProtoMessage() {}
-
-func (x *GetPrivateRecordReply) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[16]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GetPrivateRecordReply.ProtoReflect.Descriptor instead.
-func (*GetPrivateRecordReply) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{16}
-}
-
-func (x *GetPrivateRecordReply) GetFound() bool {
-	if x != nil {
-		return x.Found
-	}
-	return false
-}
-
-func (x *GetPrivateRecordReply) GetTiers() []*Tier {
-	if x != nil {
-		return x.Tiers
-	}
-	return nil
-}
-
 type ListPrivateRecordsRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
@@ -940,7 +802,7 @@ type ListPrivateRecordsRequest struct {
 
 func (x *ListPrivateRecordsRequest) Reset() {
 	*x = ListPrivateRecordsRequest{}
-	mi := &file_proto_torrent_store_proto_msgTypes[17]
+	mi := &file_proto_torrent_store_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -952,7 +814,7 @@ func (x *ListPrivateRecordsRequest) String() string {
 func (*ListPrivateRecordsRequest) ProtoMessage() {}
 
 func (x *ListPrivateRecordsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[17]
+	mi := &file_proto_torrent_store_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -965,7 +827,7 @@ func (x *ListPrivateRecordsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPrivateRecordsRequest.ProtoReflect.Descriptor instead.
 func (*ListPrivateRecordsRequest) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{17}
+	return file_proto_torrent_store_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ListPrivateRecordsRequest) GetUid() string {
@@ -989,7 +851,7 @@ type PrivateRecordInfo struct {
 
 func (x *PrivateRecordInfo) Reset() {
 	*x = PrivateRecordInfo{}
-	mi := &file_proto_torrent_store_proto_msgTypes[18]
+	mi := &file_proto_torrent_store_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1001,7 +863,7 @@ func (x *PrivateRecordInfo) String() string {
 func (*PrivateRecordInfo) ProtoMessage() {}
 
 func (x *PrivateRecordInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[18]
+	mi := &file_proto_torrent_store_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1014,7 +876,7 @@ func (x *PrivateRecordInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrivateRecordInfo.ProtoReflect.Descriptor instead.
 func (*PrivateRecordInfo) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{18}
+	return file_proto_torrent_store_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *PrivateRecordInfo) GetInfoHash() string {
@@ -1061,7 +923,7 @@ type ListPrivateRecordsReply struct {
 
 func (x *ListPrivateRecordsReply) Reset() {
 	*x = ListPrivateRecordsReply{}
-	mi := &file_proto_torrent_store_proto_msgTypes[19]
+	mi := &file_proto_torrent_store_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1073,7 +935,7 @@ func (x *ListPrivateRecordsReply) String() string {
 func (*ListPrivateRecordsReply) ProtoMessage() {}
 
 func (x *ListPrivateRecordsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[19]
+	mi := &file_proto_torrent_store_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1086,7 +948,7 @@ func (x *ListPrivateRecordsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPrivateRecordsReply.ProtoReflect.Descriptor instead.
 func (*ListPrivateRecordsReply) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{19}
+	return file_proto_torrent_store_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ListPrivateRecordsReply) GetRecords() []*PrivateRecordInfo {
@@ -1094,102 +956,6 @@ func (x *ListPrivateRecordsReply) GetRecords() []*PrivateRecordInfo {
 		return x.Records
 	}
 	return nil
-}
-
-type DeletePrivateRecordRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	InfoHash      string                 `protobuf:"bytes,1,opt,name=info_hash,json=infoHash,proto3" json:"info_hash,omitempty"`
-	Uid           string                 `protobuf:"bytes,2,opt,name=uid,proto3" json:"uid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeletePrivateRecordRequest) Reset() {
-	*x = DeletePrivateRecordRequest{}
-	mi := &file_proto_torrent_store_proto_msgTypes[20]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeletePrivateRecordRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeletePrivateRecordRequest) ProtoMessage() {}
-
-func (x *DeletePrivateRecordRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[20]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeletePrivateRecordRequest.ProtoReflect.Descriptor instead.
-func (*DeletePrivateRecordRequest) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{20}
-}
-
-func (x *DeletePrivateRecordRequest) GetInfoHash() string {
-	if x != nil {
-		return x.InfoHash
-	}
-	return ""
-}
-
-func (x *DeletePrivateRecordRequest) GetUid() string {
-	if x != nil {
-		return x.Uid
-	}
-	return ""
-}
-
-type DeletePrivateRecordReply struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Deleted       bool                   `protobuf:"varint,1,opt,name=deleted,proto3" json:"deleted,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeletePrivateRecordReply) Reset() {
-	*x = DeletePrivateRecordReply{}
-	mi := &file_proto_torrent_store_proto_msgTypes[21]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeletePrivateRecordReply) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeletePrivateRecordReply) ProtoMessage() {}
-
-func (x *DeletePrivateRecordReply) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[21]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeletePrivateRecordReply.ProtoReflect.Descriptor instead.
-func (*DeletePrivateRecordReply) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{21}
-}
-
-func (x *DeletePrivateRecordReply) GetDeleted() bool {
-	if x != nil {
-		return x.Deleted
-	}
-	return false
 }
 
 // Deletes every record of uid.
@@ -1202,7 +968,7 @@ type DeletePrivateRecordsByUserRequest struct {
 
 func (x *DeletePrivateRecordsByUserRequest) Reset() {
 	*x = DeletePrivateRecordsByUserRequest{}
-	mi := &file_proto_torrent_store_proto_msgTypes[22]
+	mi := &file_proto_torrent_store_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1214,7 +980,7 @@ func (x *DeletePrivateRecordsByUserRequest) String() string {
 func (*DeletePrivateRecordsByUserRequest) ProtoMessage() {}
 
 func (x *DeletePrivateRecordsByUserRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[22]
+	mi := &file_proto_torrent_store_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1227,7 +993,7 @@ func (x *DeletePrivateRecordsByUserRequest) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use DeletePrivateRecordsByUserRequest.ProtoReflect.Descriptor instead.
 func (*DeletePrivateRecordsByUserRequest) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{22}
+	return file_proto_torrent_store_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeletePrivateRecordsByUserRequest) GetUid() string {
@@ -1247,7 +1013,7 @@ type DeletePrivateRecordsReply struct {
 
 func (x *DeletePrivateRecordsReply) Reset() {
 	*x = DeletePrivateRecordsReply{}
-	mi := &file_proto_torrent_store_proto_msgTypes[23]
+	mi := &file_proto_torrent_store_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1259,7 +1025,7 @@ func (x *DeletePrivateRecordsReply) String() string {
 func (*DeletePrivateRecordsReply) ProtoMessage() {}
 
 func (x *DeletePrivateRecordsReply) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_torrent_store_proto_msgTypes[23]
+	mi := &file_proto_torrent_store_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1272,7 +1038,7 @@ func (x *DeletePrivateRecordsReply) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeletePrivateRecordsReply.ProtoReflect.Descriptor instead.
 func (*DeletePrivateRecordsReply) Descriptor() ([]byte, []int) {
-	return file_proto_torrent_store_proto_rawDescGZIP(), []int{23}
+	return file_proto_torrent_store_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeletePrivateRecordsReply) GetDeleted() int32 {
@@ -1301,9 +1067,10 @@ const file_proto_torrent_store_proto_rawDesc = "" +
 	"\adry_run\x18\x05 \x01(\bR\x06dryRun\"J\n" +
 	"\vPullRequest\x12\x1a\n" +
 	"\binfoHash\x18\x01 \x01(\tR\binfoHash\x12\x1f\n" +
-	"\x06caller\x18\x02 \x01(\v2\a.CallerR\x06caller\"%\n" +
+	"\x06caller\x18\x02 \x01(\v2\a.CallerR\x06caller\"N\n" +
 	"\tPullReply\x12\x18\n" +
-	"\atorrent\x18\x01 \x01(\fR\atorrent\"*\n" +
+	"\atorrent\x18\x01 \x01(\fR\atorrent\x12'\n" +
+	"\x0fcaller_trackers\x18\x02 \x01(\bR\x0ecallerTrackers\"*\n" +
 	"\fCheckRequest\x12\x1a\n" +
 	"\binfoHash\x18\x01 \x01(\tR\binfoHash\"$\n" +
 	"\n" +
@@ -1333,15 +1100,7 @@ const file_proto_torrent_store_proto_rawDesc = "" +
 	"\binfoHash\x18\x01 \x01(\tR\binfoHash\"T\n" +
 	"\x10FingerprintReply\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\x12\x16\n" +
-	"\x06length\x18\x03 \x01(\x03R\x06lengthJ\x04\b\x01\x10\x02R\ffingerprints\"\x1a\n" +
-	"\x04Tier\x12\x12\n" +
-	"\x04urls\x18\x01 \x03(\tR\x04urls\"H\n" +
-	"\x17GetPrivateRecordRequest\x12\x1b\n" +
-	"\tinfo_hash\x18\x01 \x01(\tR\binfoHash\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\tR\x03uid\"J\n" +
-	"\x15GetPrivateRecordReply\x12\x14\n" +
-	"\x05found\x18\x01 \x01(\bR\x05found\x12\x1b\n" +
-	"\x05tiers\x18\x02 \x03(\v2\x05.TierR\x05tiers\"-\n" +
+	"\x06length\x18\x03 \x01(\x03R\x06lengthJ\x04\b\x01\x10\x02R\ffingerprints\"-\n" +
 	"\x19ListPrivateRecordsRequest\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\"\x9c\x01\n" +
 	"\x11PrivateRecordInfo\x12\x1b\n" +
@@ -1353,16 +1112,11 @@ const file_proto_torrent_store_proto_rawDesc = "" +
 	"\n" +
 	"updated_at\x18\x05 \x01(\x03R\tupdatedAt\"G\n" +
 	"\x17ListPrivateRecordsReply\x12,\n" +
-	"\arecords\x18\x01 \x03(\v2\x12.PrivateRecordInfoR\arecords\"K\n" +
-	"\x1aDeletePrivateRecordRequest\x12\x1b\n" +
-	"\tinfo_hash\x18\x01 \x01(\tR\binfoHash\x12\x10\n" +
-	"\x03uid\x18\x02 \x01(\tR\x03uid\"4\n" +
-	"\x18DeletePrivateRecordReply\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\bR\adeleted\"5\n" +
+	"\arecords\x18\x01 \x03(\v2\x12.PrivateRecordInfoR\arecords\"5\n" +
 	"!DeletePrivateRecordsByUserRequest\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\"5\n" +
 	"\x19DeletePrivateRecordsReply\x12\x18\n" +
-	"\adeleted\x18\x01 \x01(\x05R\adeleted2\xa4\x04\n" +
+	"\adeleted\x18\x01 \x01(\x05R\adeleted2\x8b\x03\n" +
 	"\fTorrentStore\x12\"\n" +
 	"\x04Push\x12\f.PushRequest\x1a\n" +
 	".PushReply\"\x00\x12\"\n" +
@@ -1370,10 +1124,8 @@ const file_proto_torrent_store_proto_rawDesc = "" +
 	".PullReply\"\x00\x12%\n" +
 	"\x05Touch\x12\r.TouchRequest\x1a\v.TouchReply\"\x00\x12%\n" +
 	"\x05Files\x12\r.FilesRequest\x1a\v.FilesReply\"\x00\x127\n" +
-	"\vFingerprint\x12\x13.FingerprintRequest\x1a\x11.FingerprintReply\"\x00\x12F\n" +
-	"\x10GetPrivateRecord\x12\x18.GetPrivateRecordRequest\x1a\x16.GetPrivateRecordReply\"\x00\x12L\n" +
-	"\x12ListPrivateRecords\x12\x1a.ListPrivateRecordsRequest\x1a\x18.ListPrivateRecordsReply\"\x00\x12O\n" +
-	"\x13DeletePrivateRecord\x12\x1b.DeletePrivateRecordRequest\x1a\x19.DeletePrivateRecordReply\"\x00\x12^\n" +
+	"\vFingerprint\x12\x13.FingerprintRequest\x1a\x11.FingerprintReply\"\x00\x12L\n" +
+	"\x12ListPrivateRecords\x12\x1a.ListPrivateRecordsRequest\x1a\x18.ListPrivateRecordsReply\"\x00\x12^\n" +
 	"\x1aDeletePrivateRecordsByUser\x12\".DeletePrivateRecordsByUserRequest\x1a\x1a.DeletePrivateRecordsReply\"\x00B\x04Z\x02./b\x06proto3"
 
 var (
@@ -1388,7 +1140,7 @@ func file_proto_torrent_store_proto_rawDescGZIP() []byte {
 	return file_proto_torrent_store_proto_rawDescData
 }
 
-var file_proto_torrent_store_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_proto_torrent_store_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_proto_torrent_store_proto_goTypes = []any{
 	(*Caller)(nil),                            // 0: Caller
 	(*PushReply)(nil),                         // 1: PushReply
@@ -1404,16 +1156,11 @@ var file_proto_torrent_store_proto_goTypes = []any{
 	(*FilesReply)(nil),                        // 11: FilesReply
 	(*FingerprintRequest)(nil),                // 12: FingerprintRequest
 	(*FingerprintReply)(nil),                  // 13: FingerprintReply
-	(*Tier)(nil),                              // 14: Tier
-	(*GetPrivateRecordRequest)(nil),           // 15: GetPrivateRecordRequest
-	(*GetPrivateRecordReply)(nil),             // 16: GetPrivateRecordReply
-	(*ListPrivateRecordsRequest)(nil),         // 17: ListPrivateRecordsRequest
-	(*PrivateRecordInfo)(nil),                 // 18: PrivateRecordInfo
-	(*ListPrivateRecordsReply)(nil),           // 19: ListPrivateRecordsReply
-	(*DeletePrivateRecordRequest)(nil),        // 20: DeletePrivateRecordRequest
-	(*DeletePrivateRecordReply)(nil),          // 21: DeletePrivateRecordReply
-	(*DeletePrivateRecordsByUserRequest)(nil), // 22: DeletePrivateRecordsByUserRequest
-	(*DeletePrivateRecordsReply)(nil),         // 23: DeletePrivateRecordsReply
+	(*ListPrivateRecordsRequest)(nil),         // 14: ListPrivateRecordsRequest
+	(*PrivateRecordInfo)(nil),                 // 15: PrivateRecordInfo
+	(*ListPrivateRecordsReply)(nil),           // 16: ListPrivateRecordsReply
+	(*DeletePrivateRecordsByUserRequest)(nil), // 17: DeletePrivateRecordsByUserRequest
+	(*DeletePrivateRecordsReply)(nil),         // 18: DeletePrivateRecordsReply
 }
 var file_proto_torrent_store_proto_depIdxs = []int32{
 	0,  // 0: PushRequest.caller:type_name -> Caller
@@ -1421,31 +1168,26 @@ var file_proto_torrent_store_proto_depIdxs = []int32{
 	0,  // 2: TouchRequest.caller:type_name -> Caller
 	0,  // 3: FilesRequest.caller:type_name -> Caller
 	10, // 4: FilesReply.files:type_name -> FileInfo
-	14, // 5: GetPrivateRecordReply.tiers:type_name -> Tier
-	18, // 6: ListPrivateRecordsReply.records:type_name -> PrivateRecordInfo
-	2,  // 7: TorrentStore.Push:input_type -> PushRequest
-	3,  // 8: TorrentStore.Pull:input_type -> PullRequest
-	8,  // 9: TorrentStore.Touch:input_type -> TouchRequest
-	9,  // 10: TorrentStore.Files:input_type -> FilesRequest
-	12, // 11: TorrentStore.Fingerprint:input_type -> FingerprintRequest
-	15, // 12: TorrentStore.GetPrivateRecord:input_type -> GetPrivateRecordRequest
-	17, // 13: TorrentStore.ListPrivateRecords:input_type -> ListPrivateRecordsRequest
-	20, // 14: TorrentStore.DeletePrivateRecord:input_type -> DeletePrivateRecordRequest
-	22, // 15: TorrentStore.DeletePrivateRecordsByUser:input_type -> DeletePrivateRecordsByUserRequest
-	1,  // 16: TorrentStore.Push:output_type -> PushReply
-	4,  // 17: TorrentStore.Pull:output_type -> PullReply
-	7,  // 18: TorrentStore.Touch:output_type -> TouchReply
-	11, // 19: TorrentStore.Files:output_type -> FilesReply
-	13, // 20: TorrentStore.Fingerprint:output_type -> FingerprintReply
-	16, // 21: TorrentStore.GetPrivateRecord:output_type -> GetPrivateRecordReply
-	19, // 22: TorrentStore.ListPrivateRecords:output_type -> ListPrivateRecordsReply
-	21, // 23: TorrentStore.DeletePrivateRecord:output_type -> DeletePrivateRecordReply
-	23, // 24: TorrentStore.DeletePrivateRecordsByUser:output_type -> DeletePrivateRecordsReply
-	16, // [16:25] is the sub-list for method output_type
-	7,  // [7:16] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	15, // 5: ListPrivateRecordsReply.records:type_name -> PrivateRecordInfo
+	2,  // 6: TorrentStore.Push:input_type -> PushRequest
+	3,  // 7: TorrentStore.Pull:input_type -> PullRequest
+	8,  // 8: TorrentStore.Touch:input_type -> TouchRequest
+	9,  // 9: TorrentStore.Files:input_type -> FilesRequest
+	12, // 10: TorrentStore.Fingerprint:input_type -> FingerprintRequest
+	14, // 11: TorrentStore.ListPrivateRecords:input_type -> ListPrivateRecordsRequest
+	17, // 12: TorrentStore.DeletePrivateRecordsByUser:input_type -> DeletePrivateRecordsByUserRequest
+	1,  // 13: TorrentStore.Push:output_type -> PushReply
+	4,  // 14: TorrentStore.Pull:output_type -> PullReply
+	7,  // 15: TorrentStore.Touch:output_type -> TouchReply
+	11, // 16: TorrentStore.Files:output_type -> FilesReply
+	13, // 17: TorrentStore.Fingerprint:output_type -> FingerprintReply
+	16, // 18: TorrentStore.ListPrivateRecords:output_type -> ListPrivateRecordsReply
+	18, // 19: TorrentStore.DeletePrivateRecordsByUser:output_type -> DeletePrivateRecordsReply
+	13, // [13:20] is the sub-list for method output_type
+	6,  // [6:13] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_proto_torrent_store_proto_init() }
@@ -1460,7 +1202,7 @@ func file_proto_torrent_store_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_torrent_store_proto_rawDesc), len(file_proto_torrent_store_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   24,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

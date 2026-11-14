@@ -198,9 +198,16 @@ func dropTrackers(mi *metainfo.MetaInfo, drop []string) bool {
 
 // infoOnly is mi without Announce, AnnounceList and UrlList; InfoBytes, and
 // with them the infohash, are untouched.
-func infoOnly(mi *metainfo.MetaInfo) ([]byte, error) {
+func infoOnly(mi *metainfo.MetaInfo) ([]byte, error) { return withTiers(mi, nil) }
+
+// withTiers is infoOnly with tiers as the announce-list and their first URL
+// as announce: nothing of mi's own trackers or webseeds is left.
+func withTiers(mi *metainfo.MetaInfo, tiers [][]string) ([]byte, error) {
 	c := *mi
-	c.Announce, c.AnnounceList, c.UrlList = "", nil, nil
+	c.Announce, c.AnnounceList, c.UrlList = "", tiers, nil
+	if len(tiers) > 0 && len(tiers[0]) > 0 {
+		c.Announce = tiers[0][0]
+	}
 	var buf bytes.Buffer
 	if err := c.Write(&buf); err != nil {
 		return nil, err

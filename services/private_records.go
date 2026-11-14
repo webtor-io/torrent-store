@@ -197,17 +197,6 @@ func (r *PrivateRecords) list(ctx context.Context, uid string) ([]*pb.PrivateRec
 	return out, nil
 }
 
-// delete reports whether the record was there. GET, not HEAD, keeps
-// RecordObjects at four methods.
-func (r *PrivateRecords) delete(ctx context.Context, h, uid string) (bool, error) {
-	if _, err := r.obj.GetObject(ctx, recordKey(uid, h)); errors.Is(err, ErrNotFound) {
-		return false, nil
-	} else if err != nil {
-		return false, err
-	}
-	return true, r.obj.DeleteObject(ctx, recordKey(uid, h))
-}
-
 // deleteByUser deletes every record of uid and returns how many. On an error
 // some may be gone already; a retry deletes the rest.
 func (r *PrivateRecords) deleteByUser(ctx context.Context, uid string) (int32, error) {

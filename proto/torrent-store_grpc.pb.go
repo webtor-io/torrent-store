@@ -24,9 +24,7 @@ const (
 	TorrentStore_Touch_FullMethodName                      = "/TorrentStore/Touch"
 	TorrentStore_Files_FullMethodName                      = "/TorrentStore/Files"
 	TorrentStore_Fingerprint_FullMethodName                = "/TorrentStore/Fingerprint"
-	TorrentStore_GetPrivateRecord_FullMethodName           = "/TorrentStore/GetPrivateRecord"
 	TorrentStore_ListPrivateRecords_FullMethodName         = "/TorrentStore/ListPrivateRecords"
-	TorrentStore_DeletePrivateRecord_FullMethodName        = "/TorrentStore/DeletePrivateRecord"
 	TorrentStore_DeletePrivateRecordsByUser_FullMethodName = "/TorrentStore/DeletePrivateRecordsByUser"
 )
 
@@ -36,7 +34,10 @@ const (
 type TorrentStoreClient interface {
 	// Pushes torrent to the store
 	Push(ctx context.Context, in *PushRequest, opts ...grpc.CallOption) (*PushReply, error)
-	// Pulls torrent from the store
+	// Pulls torrent from the store. A private torrent pulled with Caller.uid
+	// comes with the trackers of that uid's record and caller_trackers set;
+	// every other pull returns the stored copy, without trackers for a private
+	// torrent under PRIVATE_ACCESS_ENFORCE.
 	Pull(ctx context.Context, in *PullRequest, opts ...grpc.CallOption) (*PullReply, error)
 	// Touch torrent in the store
 	Touch(ctx context.Context, in *TouchRequest, opts ...grpc.CallOption) (*TouchReply, error)
@@ -51,12 +52,8 @@ type TorrentStoreClient interface {
 	// stored .torrent and cached like the manifest, so callers get a few bytes
 	// instead of pulling and parsing the whole thing.
 	Fingerprint(ctx context.Context, in *FingerprintRequest, opts ...grpc.CallOption) (*FingerprintReply, error)
-	// GetPrivateRecord returns the trackers of uid's record for info_hash.
-	GetPrivateRecord(ctx context.Context, in *GetPrivateRecordRequest, opts ...grpc.CallOption) (*GetPrivateRecordReply, error)
 	// ListPrivateRecords lists every record of uid, without trackers.
 	ListPrivateRecords(ctx context.Context, in *ListPrivateRecordsRequest, opts ...grpc.CallOption) (*ListPrivateRecordsReply, error)
-	// DeletePrivateRecord deletes uid's record for info_hash.
-	DeletePrivateRecord(ctx context.Context, in *DeletePrivateRecordRequest, opts ...grpc.CallOption) (*DeletePrivateRecordReply, error)
 	// DeletePrivateRecordsByUser deletes every record of uid.
 	DeletePrivateRecordsByUser(ctx context.Context, in *DeletePrivateRecordsByUserRequest, opts ...grpc.CallOption) (*DeletePrivateRecordsReply, error)
 }
@@ -119,30 +116,10 @@ func (c *torrentStoreClient) Fingerprint(ctx context.Context, in *FingerprintReq
 	return out, nil
 }
 
-func (c *torrentStoreClient) GetPrivateRecord(ctx context.Context, in *GetPrivateRecordRequest, opts ...grpc.CallOption) (*GetPrivateRecordReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetPrivateRecordReply)
-	err := c.cc.Invoke(ctx, TorrentStore_GetPrivateRecord_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *torrentStoreClient) ListPrivateRecords(ctx context.Context, in *ListPrivateRecordsRequest, opts ...grpc.CallOption) (*ListPrivateRecordsReply, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListPrivateRecordsReply)
 	err := c.cc.Invoke(ctx, TorrentStore_ListPrivateRecords_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *torrentStoreClient) DeletePrivateRecord(ctx context.Context, in *DeletePrivateRecordRequest, opts ...grpc.CallOption) (*DeletePrivateRecordReply, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeletePrivateRecordReply)
-	err := c.cc.Invoke(ctx, TorrentStore_DeletePrivateRecord_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +142,10 @@ func (c *torrentStoreClient) DeletePrivateRecordsByUser(ctx context.Context, in 
 type TorrentStoreServer interface {
 	// Pushes torrent to the store
 	Push(context.Context, *PushRequest) (*PushReply, error)
-	// Pulls torrent from the store
+	// Pulls torrent from the store. A private torrent pulled with Caller.uid
+	// comes with the trackers of that uid's record and caller_trackers set;
+	// every other pull returns the stored copy, without trackers for a private
+	// torrent under PRIVATE_ACCESS_ENFORCE.
 	Pull(context.Context, *PullRequest) (*PullReply, error)
 	// Touch torrent in the store
 	Touch(context.Context, *TouchRequest) (*TouchReply, error)
@@ -180,12 +160,8 @@ type TorrentStoreServer interface {
 	// stored .torrent and cached like the manifest, so callers get a few bytes
 	// instead of pulling and parsing the whole thing.
 	Fingerprint(context.Context, *FingerprintRequest) (*FingerprintReply, error)
-	// GetPrivateRecord returns the trackers of uid's record for info_hash.
-	GetPrivateRecord(context.Context, *GetPrivateRecordRequest) (*GetPrivateRecordReply, error)
 	// ListPrivateRecords lists every record of uid, without trackers.
 	ListPrivateRecords(context.Context, *ListPrivateRecordsRequest) (*ListPrivateRecordsReply, error)
-	// DeletePrivateRecord deletes uid's record for info_hash.
-	DeletePrivateRecord(context.Context, *DeletePrivateRecordRequest) (*DeletePrivateRecordReply, error)
 	// DeletePrivateRecordsByUser deletes every record of uid.
 	DeletePrivateRecordsByUser(context.Context, *DeletePrivateRecordsByUserRequest) (*DeletePrivateRecordsReply, error)
 	mustEmbedUnimplementedTorrentStoreServer()
@@ -213,14 +189,8 @@ func (UnimplementedTorrentStoreServer) Files(context.Context, *FilesRequest) (*F
 func (UnimplementedTorrentStoreServer) Fingerprint(context.Context, *FingerprintRequest) (*FingerprintReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method Fingerprint not implemented")
 }
-func (UnimplementedTorrentStoreServer) GetPrivateRecord(context.Context, *GetPrivateRecordRequest) (*GetPrivateRecordReply, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetPrivateRecord not implemented")
-}
 func (UnimplementedTorrentStoreServer) ListPrivateRecords(context.Context, *ListPrivateRecordsRequest) (*ListPrivateRecordsReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPrivateRecords not implemented")
-}
-func (UnimplementedTorrentStoreServer) DeletePrivateRecord(context.Context, *DeletePrivateRecordRequest) (*DeletePrivateRecordReply, error) {
-	return nil, status.Error(codes.Unimplemented, "method DeletePrivateRecord not implemented")
 }
 func (UnimplementedTorrentStoreServer) DeletePrivateRecordsByUser(context.Context, *DeletePrivateRecordsByUserRequest) (*DeletePrivateRecordsReply, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeletePrivateRecordsByUser not implemented")
@@ -336,24 +306,6 @@ func _TorrentStore_Fingerprint_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
-func _TorrentStore_GetPrivateRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetPrivateRecordRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TorrentStoreServer).GetPrivateRecord(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TorrentStore_GetPrivateRecord_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TorrentStoreServer).GetPrivateRecord(ctx, req.(*GetPrivateRecordRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _TorrentStore_ListPrivateRecords_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListPrivateRecordsRequest)
 	if err := dec(in); err != nil {
@@ -368,24 +320,6 @@ func _TorrentStore_ListPrivateRecords_Handler(srv interface{}, ctx context.Conte
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(TorrentStoreServer).ListPrivateRecords(ctx, req.(*ListPrivateRecordsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _TorrentStore_DeletePrivateRecord_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeletePrivateRecordRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(TorrentStoreServer).DeletePrivateRecord(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: TorrentStore_DeletePrivateRecord_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(TorrentStoreServer).DeletePrivateRecord(ctx, req.(*DeletePrivateRecordRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -436,16 +370,8 @@ var TorrentStore_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TorrentStore_Fingerprint_Handler,
 		},
 		{
-			MethodName: "GetPrivateRecord",
-			Handler:    _TorrentStore_GetPrivateRecord_Handler,
-		},
-		{
 			MethodName: "ListPrivateRecords",
 			Handler:    _TorrentStore_ListPrivateRecords_Handler,
-		},
-		{
-			MethodName: "DeletePrivateRecord",
-			Handler:    _TorrentStore_DeletePrivateRecord_Handler,
 		},
 		{
 			MethodName: "DeletePrivateRecordsByUser",

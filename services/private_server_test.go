@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/webtor-io/torrent-store/privaterecord"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,43 +36,20 @@ func seedRecord(t *testing.T, obj *memObjects, h, uid string, tiers [][]string) 
 	}
 }
 
-func TestGetPrivateRecord(t *testing.T) {
-	v := privaterecord.Vector
-	obj := newMemObjects()
-	seed(t, obj, v.Hash, v.UID, v.Blob)
-	srv := recordsServer(obj)
-	r, err := srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: strings.ToUpper(v.Hash), Uid: v.UID})
-	if err != nil || !r.GetFound() || len(r.GetTiers()) != 2 || !reflect.DeepEqual(r.GetTiers()[0].GetUrls(), v.Tiers[0]) {
-		t.Fatalf("vector record: %v, %v", r, err)
-	}
-	if r, err := srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: v.Hash, Uid: uidA}); err != nil || r.GetFound() {
-		t.Fatalf("absent: %v, %v; want found=false", r, err)
-	}
-	other, _ := privaterecord.Seal(v.Key, strings.Repeat("ab", 20), uidB, v.Tiers)
-	seed(t, obj, v.Hash, uidB, other) // AAD names another hash
-	_, err = srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: v.Hash, Uid: uidB})
-	wantRefusal(t, err, codes.DataLoss, "record_unreadable")
-	obj.failOn("get", "private/", errors.New("down"))
-	_, err = srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: v.Hash, Uid: v.UID})
-	wantRefusal(t, err, codes.Unavailable, "")
-	off := NewServer(NewStore(nil), nil, nil, nil)
-	off.SetPrivate(NewPrivateRecords(nil, [][]byte{v.Key}), false)
-	_, err = off.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: v.Hash, Uid: v.UID})
-	wantRefusal(t, err, codes.FailedPrecondition, "private_unavailable")
-}
-
 func TestRecordRPCsRejectMalformedIDs(t *testing.T) {
-	obj := newMemObjects()
-	srv := recordsServer(obj)
+	srv, p, obj := privateServer(t, false)
+	h := seedPrivate(t, srv, p, true)
+	mark := len(obj.ops)
 	for _, bad := range []string{"", strings.ToUpper(uidA), "../" + uidA[3:], uidA + "/", uidA[:39]} {
 		calls := map[string]error{}
-		_, calls["get uid"] = srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: testHash, Uid: bad})
 		_, calls["list"] = srv.ListPrivateRecords(ctx, &pb.ListPrivateRecordsRequest{Uid: bad})
-		_, calls["delete uid"] = srv.DeletePrivateRecord(ctx, &pb.DeletePrivateRecordRequest{InfoHash: testHash, Uid: bad})
 		_, calls["by user"] = srv.DeletePrivateRecordsByUser(ctx, &pb.DeletePrivateRecordsByUserRequest{Uid: bad})
+		if bad != "" { // a Caller with no uid is sign_in
+			_, calls["pull uid"] = srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: bad}})
+		}
 		if bad != strings.ToUpper(uidA) { // an upper-case hash is lower-cased, an upper-case uid is not
-			_, calls["get hash"] = srv.GetPrivateRecord(ctx, &pb.GetPrivateRecordRequest{InfoHash: bad, Uid: uidA})
-			_, calls["delete hash"] = srv.DeletePrivateRecord(ctx, &pb.DeletePrivateRecordRequest{InfoHash: bad, Uid: uidA})
+			p.torrents[bad] = p.torrents[h] // found by the store: only access checks the hash
+			_, calls["pull hash"] = srv.Pull(ctx, &pb.PullRequest{InfoHash: bad, Caller: &pb.Caller{Uid: uidA}})
 		}
 		for name, err := range calls {
 			if status.Code(err) != codes.InvalidArgument {
@@ -81,8 +57,8 @@ func TestRecordRPCsRejectMalformedIDs(t *testing.T) {
 			}
 		}
 	}
-	if len(obj.ops) != 0 {
-		t.Fatalf("malformed ids reached the bucket: %q", obj.ops)
+	if len(obj.ops) != mark {
+		t.Fatalf("malformed ids reached the bucket: %q", obj.ops[mark:])
 	}
 }
 
@@ -110,20 +86,14 @@ func TestListPrivateRecords(t *testing.T) {
 	}
 }
 
-func TestDeletePrivateRecords(t *testing.T) {
+func TestDeletePrivateRecordsByUser(t *testing.T) {
 	obj := newMemObjects()
 	h2 := strings.Repeat("cd", 20)
 	seedRecord(t, obj, testHash, uidA, [][]string{{trA}})
 	seedRecord(t, obj, h2, uidA, [][]string{{trB}})
 	seedRecord(t, obj, testHash, uidB, [][]string{{trB}})
 	srv := recordsServer(obj)
-	if r, err := srv.DeletePrivateRecord(ctx, &pb.DeletePrivateRecordRequest{InfoHash: testHash, Uid: uidA}); err != nil || !r.GetDeleted() {
-		t.Fatalf("delete = %v, %v", r, err)
-	}
-	if r, _ := srv.DeletePrivateRecord(ctx, &pb.DeletePrivateRecordRequest{InfoHash: testHash, Uid: uidA}); r.GetDeleted() {
-		t.Fatal("second delete reports deleted")
-	}
-	if r, err := srv.DeletePrivateRecordsByUser(ctx, &pb.DeletePrivateRecordsByUserRequest{Uid: uidA}); err != nil || r.GetDeleted() != 1 {
+	if r, err := srv.DeletePrivateRecordsByUser(ctx, &pb.DeletePrivateRecordsByUserRequest{Uid: uidA}); err != nil || r.GetDeleted() != 2 {
 		t.Fatalf("by user = %v, %v", r, err)
 	}
 	if _, ok := obj.objs[recordKey(uidB, testHash)]; !ok || len(obj.objs) != 1 {

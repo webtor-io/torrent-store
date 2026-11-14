@@ -22,6 +22,7 @@ import (
 const (
 	uidA = "0123456789abcdef0123456789abcdef01234567" // acct deb87fab
 	uidB = "89abcdef0123456789abcdef0123456789abcdef" // acct 5f44da3a
+	uidC = "fedcba9876543210fedcba9876543210fedcba98"
 	trA  = "http://tracker.example/a/00000000000000000000000000000000/announce"
 	trA2 = "http://tracker.example/a2/00000000000000000000000000000000/announce"
 	trB  = "udp://tracker.invalid:6969/00000000000000000000000000000000/announce"

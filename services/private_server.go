@@ -24,7 +24,6 @@ const (
 	reasonTooManyTrackers = "private_too_many_trackers"
 	reasonSignIn          = "sign_in"
 	reasonNoRecord        = "no_record"
-	reasonUnreadable      = "record_unreadable"
 )
 
 // The text each refusal is sent with: English, no URLs, no keys.
@@ -35,7 +34,6 @@ const (
 	msgTooManyTrackers = "private torrent has more than 32 trackers"
 	msgSignIn          = "private torrent: sign in to play it"
 	msgNoRecord        = "private torrent: no tracker record for this account"
-	msgUnreadable      = "private record cannot be opened"
 )
 
 // refusal is a status with errdetails.ErrorInfo{Domain: errDomain, Reason: reason}.
@@ -180,67 +178,47 @@ func unavailable(err error) error {
 	return status.Error(codes.Unavailable, "private records: S3 request failed")
 }
 
-// access decides whether caller c may read private torrent h. nil means allowed.
-// Called only for private torrents. Without a Caller the call came from an old
-// caller: allowed until enforce. An S3 error is Unavailable, never no_record.
-func (s *Server) access(ctx context.Context, h string, c *pb.Caller) error {
+// access decides whether caller c may read private torrent h. A nil error means
+// allowed; a uid is allowed by its record, whose tiers come back from the same
+// read. Called only for private torrents. Without a Caller the call came from
+// an old caller: allowed until enforce. An S3 error is Unavailable, never no_record.
+func (s *Server) access(ctx context.Context, h string, c *pb.Caller) ([][]string, error) {
 	count := func(caller, outcome string) { privateAccessTotal.WithLabelValues(caller, outcome).Inc() }
 	switch {
 	case c == nil && !s.enforce:
 		count("legacy", "allowed")
-		return nil
+		return nil, nil
 	case c == nil:
 		count("legacy", "sign_in")
-		return refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)
+		return nil, refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)
 	case c.GetInternal():
 		count("internal", "allowed")
-		return nil
+		return nil, nil
 	case !s.p.Available():
 		count("uid", "disabled")
-		return refusal(codes.FailedPrecondition, reasonUnavailable, msgUnavailable)
+		return nil, refusal(codes.FailedPrecondition, reasonUnavailable, msgUnavailable)
 	case c.GetUid() == "":
 		count("uid", "sign_in")
-		return refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)
+		return nil, refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)
 	}
 	h = strings.ToLower(h)
 	if err := s.recordsReady(h, c.GetUid()); err != nil {
-		return err
+		return nil, err
 	}
-	_, _, err := s.p.open(ctx, h, c.GetUid())
+	_, tiers, err := s.p.open(ctx, h, c.GetUid())
 	switch {
 	case errors.Is(err, ErrNotFound):
 		count("uid", "no_record")
-		return refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
+		return nil, refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
 	case errors.Is(err, errUnreadable):
 		count("uid", "unreadable")
-		return refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
+		return nil, refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
 	case err != nil:
 		count("uid", "unavailable")
-		return unavailable(err)
-	}
-	count("uid", "allowed")
-	return nil
-}
-
-func (s *Server) GetPrivateRecord(ctx context.Context, in *pb.GetPrivateRecordRequest) (*pb.GetPrivateRecordReply, error) {
-	h, uid := strings.ToLower(in.GetInfoHash()), in.GetUid()
-	if err := s.recordsReady(h, uid); err != nil {
-		return nil, err
-	}
-	_, tiers, err := s.p.open(ctx, h, uid)
-	switch {
-	case errors.Is(err, ErrNotFound):
-		return &pb.GetPrivateRecordReply{}, nil
-	case errors.Is(err, errUnreadable):
-		return nil, refusal(codes.DataLoss, reasonUnreadable, msgUnreadable)
-	case err != nil:
 		return nil, unavailable(err)
 	}
-	r := &pb.GetPrivateRecordReply{Found: true}
-	for _, t := range tiers {
-		r.Tiers = append(r.Tiers, &pb.Tier{Urls: t})
-	}
-	return r, nil
+	count("uid", "allowed")
+	return tiers, nil
 }
 
 func (s *Server) ListPrivateRecords(ctx context.Context, in *pb.ListPrivateRecordsRequest) (*pb.ListPrivateRecordsReply, error) {
@@ -252,18 +230,6 @@ func (s *Server) ListPrivateRecords(ctx context.Context, in *pb.ListPrivateRecor
 		return nil, unavailable(err)
 	}
 	return &pb.ListPrivateRecordsReply{Records: recs}, nil
-}
-
-func (s *Server) DeletePrivateRecord(ctx context.Context, in *pb.DeletePrivateRecordRequest) (*pb.DeletePrivateRecordReply, error) {
-	h, uid := strings.ToLower(in.GetInfoHash()), in.GetUid()
-	if err := s.recordsReady(h, uid); err != nil {
-		return nil, err
-	}
-	ok, err := s.p.delete(ctx, h, uid)
-	if err != nil {
-		return nil, unavailable(err)
-	}
-	return &pb.DeletePrivateRecordReply{Deleted: ok}, nil
 }
 
 func (s *Server) DeletePrivateRecordsByUser(ctx context.Context, in *pb.DeletePrivateRecordsByUserRequest) (*pb.DeletePrivateRecordsReply, error) {

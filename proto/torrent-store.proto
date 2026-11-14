@@ -6,7 +6,10 @@ service TorrentStore {
   // Pushes torrent to the store
   rpc Push (PushRequest) returns (PushReply) {}
 
-  // Pulls torrent from the store
+  // Pulls torrent from the store. A private torrent pulled with Caller.uid
+  // comes with the trackers of that uid's record and caller_trackers set;
+  // every other pull returns the stored copy, without trackers for a private
+  // torrent under PRIVATE_ACCESS_ENFORCE.
   rpc Pull (PullRequest) returns (PullReply) {}
 
   // Touch torrent in the store
@@ -25,14 +28,8 @@ service TorrentStore {
   // instead of pulling and parsing the whole thing.
   rpc Fingerprint (FingerprintRequest) returns (FingerprintReply) {}
 
-  // GetPrivateRecord returns the trackers of uid's record for info_hash.
-  rpc GetPrivateRecord           (GetPrivateRecordRequest)           returns (GetPrivateRecordReply) {}
-
   // ListPrivateRecords lists every record of uid, without trackers.
   rpc ListPrivateRecords         (ListPrivateRecordsRequest)         returns (ListPrivateRecordsReply) {}
-
-  // DeletePrivateRecord deletes uid's record for info_hash.
-  rpc DeletePrivateRecord        (DeletePrivateRecordRequest)        returns (DeletePrivateRecordReply) {}
 
   // DeletePrivateRecordsByUser deletes every record of uid.
   rpc DeletePrivateRecordsByUser (DeletePrivateRecordsByUserRequest) returns (DeletePrivateRecordsReply) {}
@@ -70,9 +67,14 @@ message PullRequest {
   Caller caller   = 2;
 }
 
-// The pull response message containing the torrent
+// The pull response message containing the torrent. caller_trackers is true
+// when torrent carries the trackers of Caller.uid's record and none of the
+// stored copy's: such a reply is for that uid only, never cache it by info
+// hash or hand it to another user. false in every other case and from an old
+// store.
 message PullReply {
-  bytes torrent = 1;
+  bytes torrent        = 1;
+  bool caller_trackers = 2;
 }
 
 // The check request message containing the infoHash
@@ -138,22 +140,6 @@ message FingerprintReply {
   int64 length = 3;
 }
 
-// One announce tier: its tracker URLs.
-message Tier {
-  repeated string urls = 1;
-}
-
-message GetPrivateRecordRequest {
-  string info_hash = 1;
-  string uid       = 2;
-}
-
-// tiers are in plaintext.
-message GetPrivateRecordReply {
-  bool found          = 1;
-  repeated Tier tiers = 2;
-}
-
 message ListPrivateRecordsRequest {
   string uid = 1;
 }
@@ -169,15 +155,6 @@ message PrivateRecordInfo {
 
 message ListPrivateRecordsReply {
   repeated PrivateRecordInfo records = 1;
-}
-
-message DeletePrivateRecordRequest {
-  string info_hash = 1;
-  string uid       = 2;
-}
-
-message DeletePrivateRecordReply {
-  bool deleted = 1;
 }
 
 // Deletes every record of uid.

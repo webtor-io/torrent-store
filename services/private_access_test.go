@@ -1,8 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -36,10 +39,10 @@ func TestPrivateAccessMatrix(t *testing.T) {
 	callers := []struct {
 		name string
 		c    *pb.Caller
-	}{{"legacy", nil}, {"internal", &pb.Caller{Internal: true}}, {"anon", &pb.Caller{}}, {"no record", &pb.Caller{Uid: uidB}}, {"record", &pb.Caller{Uid: uidA}}}
+	}{{"legacy", nil}, {"internal", &pb.Caller{Internal: true}}, {"internal uid", &pb.Caller{Uid: uidA, Internal: true}}, {"anon", &pb.Caller{}}, {"no record", &pb.Caller{Uid: uidB}}, {"record", &pb.Caller{Uid: uidA}}}
 	want := func(private, enforce bool, caller string) (codes.Code, string) {
 		switch {
-		case !private, caller == "internal", caller == "record", caller == "legacy" && !enforce:
+		case !private, strings.HasPrefix(caller, "internal"), caller == "record", caller == "legacy" && !enforce:
 			return codes.OK, ""
 		case caller == "no record":
 			return codes.PermissionDenied, "no_record"
@@ -56,8 +59,17 @@ func TestPrivateAccessMatrix(t *testing.T) {
 				code, reason := want(private, enforce, c.name)
 				pull, err := srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: c.c})
 				wantRefusal(t, err, code, reason)
-				if err == nil {
-					if announce, _ := parseAnnounce(t, pull.GetTorrent()); (len(announce) > 0) != !(private && enforce) {
+				// A uid's record brings its own trackers; everyone else gets the
+				// stored copy, without trackers under enforce, as before.
+				if mine := private && c.name == "record"; err == nil {
+					switch announce, _ := parseAnnounce(t, pull.GetTorrent()); {
+					case pull.GetCallerTrackers() != mine:
+						t.Fatalf("%s: caller_trackers = %v", name, pull.GetCallerTrackers())
+					case mine && !slices.Equal(announce, []string{trB}):
+						t.Fatalf("%s: Pull announce = %v, want the record's", name, announce)
+					case !mine && !(private && enforce) && !bytes.Equal(pull.GetTorrent(), p.torrents[h]):
+						t.Fatalf("%s: Pull is not the stored copy as is", name)
+					case !mine && (len(announce) > 0) != !(private && enforce):
 						t.Fatalf("%s: Pull announce = %v", name, announce)
 					}
 				}
@@ -71,6 +83,60 @@ func TestPrivateAccessMatrix(t *testing.T) {
 			}
 			if !private && len(obj.ops) != mark {
 				t.Fatalf("public torrent reached the bucket: %q", obj.ops[mark:])
+			}
+		}
+	}
+}
+
+// A uid's Pull answers with its record's tiers and nothing of the stored copy,
+// keep-first trackers and webseeds included, enforce or not, from one GET.
+func TestPullCallerTrackers(t *testing.T) {
+	const trB2 = "udp://tracker.invalid:6969/b2/00000000000000000000000000000000/announce"
+	tiersA := [][]string{{trB, trB2}, {trA2}}
+	tiersB := [][]string{{trB2}}
+	for _, enforce := range []bool{false, true} {
+		srv, p, obj := privateServer(t, enforce)
+		stored := makeTorrent(t, trA, metainfo.AnnounceList{{trA}, {openTracker}}, metainfo.UrlList{"http://seed.example/00000000000000000000000000000000/"}, true)
+		h := infoHashOf(t, stored)
+		p.torrents[h] = stored // keep-first's copy from before records
+		empty, err := privaterecord.Seal(privaterecord.Vector.Key, h, uidC, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		seed(t, obj, h, uidC, empty) // authentic, but no tier: still nothing of the copy
+		for _, c := range []struct {
+			uid   string
+			tiers [][]string
+		}{{uidA, tiersA}, {uidB, tiersB}, {uidC, nil}} {
+			if c.tiers != nil {
+				if _, err := srv.p.upsert(ctx, h, c.uid, c.tiers, "site", true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			name := fmt.Sprintf("enforce=%v %s", enforce, privaterecord.Acct(c.uid))
+			gets := obj.count("get", "private/")
+			r, err := srv.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: c.uid}})
+			if err != nil || !r.GetCallerTrackers() {
+				t.Fatalf("%s: %v, caller_trackers %v", name, err, r.GetCallerTrackers())
+			}
+			if n := obj.count("get", "private/") - gets; n != 1 {
+				t.Fatalf("%s: %d record GETs, want 1", name, n)
+			}
+			mi, err := metainfo.Load(bytes.NewReader(r.GetTorrent()))
+			if err != nil || mi.HashInfoBytes().HexString() != h {
+				t.Fatalf("%s: load = %v, %v; want info hash %s", name, mi, err, h)
+			}
+			announce := ""
+			if len(c.tiers) > 0 {
+				announce = c.tiers[0][0]
+			}
+			if mi.Announce != announce || !reflect.DeepEqual([][]string(mi.AnnounceList), c.tiers) || len(mi.UrlList) != 0 {
+				t.Fatalf("%s: announce %q, announce-list %q, url-list %q; want %q, %q, none", name, mi.Announce, mi.AnnounceList, mi.UrlList, announce, c.tiers)
+			}
+			for _, leak := range []string{trA, openTracker, "seed.example"} {
+				if bytes.Contains(r.GetTorrent(), []byte(leak)) {
+					t.Fatalf("%s: reply carries the stored copy's %q", name, leak)
+				}
 			}
 		}
 	}
@@ -96,7 +162,9 @@ func TestPrivateAccessFailsClosed(t *testing.T) {
 	wantRefusal(t, pull(&pb.Caller{Uid: "../" + uidA[3:]}), codes.InvalidArgument, "")
 	obj.failOn("get", "private/", errors.New("down"))
 	wantRefusal(t, pull(&pb.Caller{Uid: uidA}), codes.Unavailable, "") // never no_record
-	srv.SetPrivate(NewPrivateRecords(nil, [][]byte{privaterecord.Vector.Key}), false)
+	srv.SetPrivate(NewPrivateRecords(obj, nil), false)                 // no key
+	wantRefusal(t, pull(&pb.Caller{Uid: uidA}), codes.FailedPrecondition, "private_unavailable")
+	srv.SetPrivate(NewPrivateRecords(nil, [][]byte{privaterecord.Vector.Key}), false) // no S3
 	wantRefusal(t, pull(&pb.Caller{Uid: uidA}), codes.FailedPrecondition, "private_unavailable")
 	wantRefusal(t, pull(&pb.Caller{Internal: true}), codes.OK, "")
 }

@@ -130,20 +130,32 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 	if err = s.gatePayload(ctx, in.GetInfoHash(), pt, hLog, t); err != nil {
 		return nil, err
 	}
+	reply := &pb.PullReply{}
 	if pt.info.Private != nil && *pt.info.Private {
-		if err = s.access(ctx, in.GetInfoHash(), in.GetCaller()); err != nil {
+		c := in.GetCaller()
+		tiers, err := s.access(ctx, in.GetInfoHash(), c)
+		if err != nil {
 			return nil, err
 		}
+		switch {
+		// Allowed for a uid means by its record: the reply carries that
+		// record's trackers and nothing of the stored copy, enforce or not.
+		case c.GetUid() != "" && !c.GetInternal():
+			if torrent, err = withTiers(pt.mi, tiers); err != nil {
+				return nil, errors.Wrapf(err, "failed to set caller trackers infoHash=%v", in.GetInfoHash())
+			}
+			reply.CallerTrackers = true
 		// Under enforce a copy stored by keep-first before records existed
 		// still names the first uploader's trackers: they never leave by Pull.
-		if s.enforce {
+		case s.enforce:
 			if torrent, err = infoOnly(pt.mi); err != nil {
 				return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", in.GetInfoHash())
 			}
 		}
 	}
+	reply.Torrent = torrent
 	hLog.WithField("len", len(torrent)).WithField("duration", time.Since(t)).Info("sending torrent response")
-	return &pb.PullReply{Torrent: []byte(torrent)}, nil
+	return reply, nil
 }
 
 func (s *Server) checkStoplist(pt *parsedTorrent, log *log.Entry, t time.Time, hash string) error {
@@ -364,7 +376,7 @@ func (s *Server) Files(ctx context.Context, in *pb.FilesRequest) (*pb.FilesReply
 	}
 	// On every call, cache hits included: the manifest is shared, access is per caller.
 	if reply.GetPrivate() {
-		if err = s.access(ctx, infoHash, in.GetCaller()); err != nil {
+		if _, err = s.access(ctx, infoHash, in.GetCaller()); err != nil {
 			return nil, err
 		}
 	}
@@ -510,7 +522,7 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 			if err = s.gateInfoHash(ctx, infoHash, hLog, t); err != nil {
 				return nil, err
 			}
-			if err = s.access(ctx, infoHash, c); err != nil {
+			if _, err = s.access(ctx, infoHash, c); err != nil {
 				return nil, err
 			}
 		}
