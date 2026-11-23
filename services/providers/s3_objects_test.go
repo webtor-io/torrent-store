@@ -115,3 +115,57 @@ func TestS3PutObjectSendsKeyBodyAndMD5(t *testing.T) {
 		t.Fatalf("PutObject = %v", err)
 	}
 }
+
+// ListRoot lists the bucket root only (delimiter "/": private/ comes back as a
+// common prefix, never as keys), resumes after start-after and hands over
+// every page as it arrives.
+func TestS3ListRootStreamsRootOnly(t *testing.T) {
+	s := newTestS3(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if r.Method != http.MethodGet || r.URL.Path != "/torrent-store" || q.Get("list-type") != "2" ||
+			q.Get("delimiter") != "/" || q.Get("prefix") != "" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		switch q.Get("continuation-token") {
+		case "":
+			if q.Get("start-after") != "a0" {
+				t.Errorf("start-after = %q", q.Get("start-after"))
+			}
+			_, _ = io.WriteString(w, `<ListBucketResult><Name>torrent-store</Name><Delimiter>/</Delimiter>`+
+				`<IsTruncated>true</IsTruncated><NextContinuationToken>t2</NextContinuationToken>`+
+				`<Contents><Key>a1</Key></Contents><Contents><Key>a1.manifest</Key></Contents>`+
+				`<CommonPrefixes><Prefix>private/</Prefix></CommonPrefixes></ListBucketResult>`)
+		case "t2":
+			_, _ = io.WriteString(w, `<ListBucketResult><Name>torrent-store</Name><Delimiter>/</Delimiter>`+
+				`<IsTruncated>false</IsTruncated><Contents><Key>b2</Key></Contents></ListBucketResult>`)
+		default:
+			t.Errorf("unexpected continuation-token %q", q.Get("continuation-token"))
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	var pages [][]string
+	err := s.ListRoot(t.Context(), "a0", func(keys []string) bool { pages = append(pages, keys); return true })
+	if err != nil || !reflect.DeepEqual(pages, [][]string{{"a1", "a1.manifest"}, {"b2"}}) {
+		t.Fatalf("ListRoot pages = %q, %v", pages, err)
+	}
+}
+
+func TestS3Versioning(t *testing.T) {
+	for body, want := range map[string]string{
+		`<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`:   "Enabled",
+		`<VersioningConfiguration><Status>Suspended</Status></VersioningConfiguration>`: "Suspended",
+		`<VersioningConfiguration/>`: "Off",
+	} {
+		s := newTestS3(t, func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := r.URL.Query()["versioning"]; r.Method != http.MethodGet || r.URL.Path != "/torrent-store" || !ok {
+				t.Errorf("unexpected request %s %s", r.Method, r.URL)
+			}
+			_, _ = io.WriteString(w, body)
+		})
+		if got, err := s.Versioning(t.Context()); err != nil || got != want {
+			t.Fatalf("Versioning = %q, %v; want %q", got, err, want)
+		}
+	}
+}

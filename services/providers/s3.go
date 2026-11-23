@@ -185,5 +185,37 @@ func (s *S3) ListObjects(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// ListRoot hands the keys at the bucket root to page, one listing page at a
+// time and in key order after startAfter, until page returns false. The "/"
+// delimiter folds every deeper key into a common prefix that is never
+// descended, so private records (private/<uid>/<hash>) are not listed.
+// Used by private-rewrite, which must not hold the whole bucket in memory.
+func (s *S3) ListRoot(ctx context.Context, startAfter string, page func(keys []string) bool) error {
+	in := &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Delimiter: aws.String("/")}
+	if startAfter != "" {
+		in.StartAfter = aws.String(startAfter)
+	}
+	return s.cl.Get().ListObjectsV2PagesWithContext(ctx, in, func(p *s3.ListObjectsV2Output, _ bool) bool {
+		keys := make([]string, len(p.Contents))
+		for i, o := range p.Contents {
+			keys[i] = aws.StringValue(o.Key)
+		}
+		return page(keys)
+	})
+}
+
+// Versioning is the bucket's versioning status: Enabled, Suspended, or Off
+// for a bucket that never had it.
+func (s *S3) Versioning(ctx context.Context) (string, error) {
+	out, err := s.cl.Get().GetBucketVersioningWithContext(ctx, &s3.GetBucketVersioningInput{Bucket: aws.String(s.bucket)})
+	if err != nil {
+		return "", err
+	}
+	if v := aws.StringValue(out.Status); v != "" {
+		return v, nil
+	}
+	return "Off", nil
+}
+
 var _ ss.StoreProvider = (*S3)(nil)
 var _ ss.RecordObjects = (*S3)(nil)
