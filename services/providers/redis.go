@@ -83,6 +83,12 @@ func (s *Redis) Pull(ctx context.Context, h string) (torrent []byte, err error) 
 	return
 }
 
+// Delete drops the .torrent under h; derived blobs stay. private-rewrite uses
+// it so the next Pull backfills the rewritten S3 copy.
+func (s *Redis) Delete(ctx context.Context, h string) error {
+	return s.cl.Get().Del(ctx, h).Err()
+}
+
 // derivedKey namespaces derived blobs so they never collide with the raw
 // .torrent stored under the bare infoHash. The prefixes are FROZEN: entries
 // written under them are still being read.

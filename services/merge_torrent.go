@@ -200,6 +200,29 @@ func dropTrackers(mi *metainfo.MetaInfo, drop []string) bool {
 // with them the infohash, are untouched.
 func infoOnly(mi *metainfo.MetaInfo) ([]byte, error) { return withTiers(mi, nil) }
 
+// StripPrivate is what private-rewrite stores in place of raw. private is
+// the BEP 27 flag. For a private torrent that names a tracker or webseed, out
+// is infoOnly of it and hash the infohash read back from out; out is nil for
+// every other torrent.
+func StripPrivate(raw []byte) (out []byte, hash string, private bool, err error) {
+	pt, err := parseTorrent(raw)
+	if err != nil {
+		return nil, "", false, err
+	}
+	private = pt.info.Private != nil && *pt.info.Private
+	if !private || !hasTrackers(pt.mi) {
+		return nil, "", private, nil
+	}
+	if out, err = infoOnly(pt.mi); err != nil {
+		return nil, "", true, err
+	}
+	mi, err := metainfo.Load(bytes.NewReader(out))
+	if err != nil {
+		return nil, "", true, err
+	}
+	return out, mi.HashInfoBytes().HexString(), true, nil
+}
+
 // withTiers is infoOnly with tiers as the announce-list and their first URL
 // as announce: nothing of mi's own trackers or webseeds is left.
 func withTiers(mi *metainfo.MetaInfo, tiers [][]string) ([]byte, error) {
