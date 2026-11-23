@@ -43,9 +43,30 @@ OPTIONS:
    --stoplist-path value               stoplist path [$STOPLIST_PATH]
 ```
 
+## Private torrents
+
+A torrent with the BEP 27 `private` flag is stored info-only. Every Push drops
+its announce, announce-list and url-list, and a Push that finds an older copy
+still carrying lists rewrites it without them. A Push with `Caller.uid` keeps
+that user's trackers in a sealed record (`private/<uid>/<hash>` in S3; needs
+`PRIVATE_TRACKERS_KEY` and S3).
+
+Pull, Files and Touch of a private torrent decide by the caller:
+
+- `Caller.internal`: allowed; Pull returns the info-only copy;
+- `Caller.uid` with a record: allowed; Pull returns the copy with that record's
+  trackers and `caller_trackers` set;
+- `Caller.uid` without a record: refused, `no_record`;
+- empty `Caller`, or none at all: refused, `sign_in`.
+
+This is the only mode. The `PRIVATE_ACCESS_ENFORCE` switch of earlier releases
+is gone, and the variable is ignored if still set.
+
 ## Client usage
 
-It is connecting to local server instance localhost:50051.
+It is connecting to local server instance localhost:50051. It sends no
+`Caller`: a private torrent it pushes is stored without trackers, and pulling
+or touching one is refused.
 
 ```
 % ./client help

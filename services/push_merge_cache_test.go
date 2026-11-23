@@ -60,27 +60,6 @@ func storedTrackers(t *testing.T, p *fakeProvider, h string) []string {
 	return trackers
 }
 
-// Two users push the same private torrent with their own passkeys: the store
-// keeps the first user's and never shows the second's to anyone.
-func TestPushPrivateKeepsFirstPasskey(t *testing.T) {
-	p := newFakeProvider("mem", true)
-	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, []string{openTracker})
-
-	r, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, passkeyA, nil, nil, true)})
-	if err != nil {
-		t.Fatalf("first push: %v", err)
-	}
-	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, passkeyB, metainfo.AnnounceList{{passkeyB}}, nil, true)}); err != nil {
-		t.Fatalf("second push: %v", err)
-	}
-	if bytes.Contains(p.torrents[r.GetInfoHash()], []byte("BBB")) {
-		t.Fatal("second user's passkey was stored")
-	}
-	if got := storedTrackers(t, p, r.GetInfoHash()); !slices.Equal(got, []string{passkeyA}) {
-		t.Fatalf("stored trackers = %v, want only the first upload's", got)
-	}
-}
-
 // The private rule must not leak into public torrents: their announce lists
 // still union, which is what fixed magnet-only torrents stalling.
 func TestPushPublicStillUnionsTrackers(t *testing.T) {
@@ -99,37 +78,6 @@ func TestPushPublicStillUnionsTrackers(t *testing.T) {
 	}
 }
 
-// A private torrent resolved from a bare magnet arrives with only the default
-// trackers magnet2torrent announced: it is stored trackerless, and the first
-// real upload then supplies its trackers. The default can also arrive as
-// announce (rest-api puts a magnet's first tr= there).
-func TestPushPrivateDropsDefaultTrackers(t *testing.T) {
-	p := newFakeProvider("mem", true)
-	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, []string{openTracker})
-
-	r, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, openTracker, metainfo.AnnounceList{{openTracker}}, nil, true)})
-	if err != nil {
-		t.Fatalf("magnet push: %v", err)
-	}
-	if got := storedTrackers(t, p, r.GetInfoHash()); len(got) != 0 {
-		t.Fatalf("stored trackers = %v, want none", got)
-	}
-	mi, err := metainfo.Load(bytes.NewReader(p.torrents[r.GetInfoHash()]))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mi.HashInfoBytes().HexString() != r.GetInfoHash() {
-		t.Fatal("dropping trackers changed the infohash")
-	}
-
-	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, "", metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)}); err != nil {
-		t.Fatalf("upload push: %v", err)
-	}
-	if got := storedTrackers(t, p, r.GetInfoHash()); !slices.Equal(got, []string{passkeyA}) {
-		t.Fatalf("stored trackers = %v, want only the upload's own", got)
-	}
-}
-
 // failingPullProvider is a tier whose reads fail with an outage rather than
 // a miss. Writes land, so a test sees whether Push wrote blind.
 type failingPullProvider struct {
@@ -140,9 +88,8 @@ func (f *failingPullProvider) Pull(_ context.Context, _ string) ([]byte, error) 
 	return nil, errors.New("down")
 }
 
-// Without the stored copy Push cannot tell whether a private torrent already
-// has its first trackers, so it refuses rather than overwrite them. A public
-// torrent still falls back to pushing as-is.
+// A private push that cannot read the stored copy writes nothing and answers
+// Unavailable. A public torrent still falls back to pushing as-is.
 func TestPushPrivatePullErrorIsUnavailable(t *testing.T) {
 	p := &failingPullProvider{newFakeProvider("mem", true)}
 	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, nil)
@@ -163,54 +110,20 @@ func TestPushPrivatePullErrorIsUnavailable(t *testing.T) {
 	}
 }
 
-// Each pod reads through its own L1 first. A pod whose L1 still holds the
-// trackerless copy must not adopt a second upload over the first one that
-// another pod already stored.
+// Each pod reads through its own L1 first. A private push reads the copy
+// every pod shares: a pod whose L1 already holds an info-only copy would find
+// nothing to clear and leave an old copy with lists in the shared tier.
 func TestPushPrivateReadsSharedTier(t *testing.T) {
-	shared := newFakeProvider("shared", true)
-	pod1 := NewServer(NewStore([]StoreProvider{newFakeProvider("l1", true), shared}), nil, nil, nil)
-	pod2 := NewServer(NewStore([]StoreProvider{newFakeProvider("l1", true), shared}), nil, nil, nil)
-
-	r, err := pod1.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, "", nil, nil, true)})
-	if err != nil {
-		t.Fatalf("magnet push: %v", err)
+	l1, shared := newFakeProvider("l1", true), newFakeProvider("shared", true)
+	srv := NewServer(NewStore([]StoreProvider{l1, shared}), nil, nil, nil)
+	bare := makeTorrent(t, "", nil, nil, true)
+	h := infoHashOf(t, bare)
+	l1.torrents[h] = bare
+	shared.torrents[h] = makeTorrent(t, passkeyA, nil, nil, true) // stored by keep-first before records
+	if _, err := srv.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, passkeyB, nil, nil, true)}); err != nil {
+		t.Fatalf("push: %v", err)
 	}
-	if _, err := pod2.Pull(context.Background(), &pb.PullRequest{InfoHash: r.GetInfoHash()}); err != nil {
-		t.Fatalf("pull: %v", err)
-	}
-	if _, err := pod1.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, passkeyA, nil, nil, true)}); err != nil {
-		t.Fatalf("first upload: %v", err)
-	}
-	if _, err := pod2.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, passkeyB, nil, nil, true)}); err != nil {
-		t.Fatalf("second upload: %v", err)
-	}
-	if got := storedTrackers(t, shared, r.GetInfoHash()); !slices.Equal(got, []string{passkeyA}) {
-		t.Fatalf("shared trackers = %v, want the first upload's", got)
-	}
-}
-
-// After repeated misses the rate limiter answers ErrNotFound without reading.
-// A private push must not take that for "not stored" and write blind.
-func TestPushPrivateIgnoresMissRateLimit(t *testing.T) {
-	shared := newFakeProvider("shared", true)
-	pod1 := NewServer(NewStore([]StoreProvider{shared}), nil, nil, nil)
-	pod2 := NewServer(NewStore([]StoreProvider{shared}), nil, nil, nil)
-	a := makeTorrent(t, passkeyA, nil, nil, true)
-	pt, err := parseTorrent(a)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := pt.mi.HashInfoBytes().HexString()
-	for i := 0; i < 10; i++ {
-		_, _ = pod2.Touch(context.Background(), &pb.TouchRequest{InfoHash: h})
-	}
-	if _, err := pod1.Push(context.Background(), &pb.PushRequest{Torrent: a}); err != nil {
-		t.Fatalf("first upload: %v", err)
-	}
-	if _, err := pod2.Push(context.Background(), &pb.PushRequest{Torrent: makeTorrent(t, passkeyB, nil, nil, true)}); err != nil {
-		t.Fatalf("second upload: %v", err)
-	}
-	if got := storedTrackers(t, shared, h); !slices.Equal(got, []string{passkeyA}) {
-		t.Fatalf("shared trackers = %v, want the first upload's", got)
+	if got := storedTrackers(t, shared, h); len(got) != 0 {
+		t.Fatalf("shared trackers = %v, want none", got)
 	}
 }

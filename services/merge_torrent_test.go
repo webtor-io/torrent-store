@@ -2,7 +2,6 @@ package services
 
 import (
 	"bytes"
-	"slices"
 	"testing"
 
 	"github.com/anacrolix/torrent/bencode"
@@ -55,7 +54,7 @@ func TestMergeAddsTrackers(t *testing.T) {
 		metainfo.AnnounceList{{"http://a/announce"}, {"udp://b:80/announce"}},
 		nil, false)
 
-	merged, changed, _, err := mergeTorrent(existing, incoming, nil)
+	merged, changed, err := mergeTorrent(existing, incoming, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +73,7 @@ func TestMergeDedup(t *testing.T) {
 	incoming := makeTorrent(t, "",
 		metainfo.AnnounceList{{"http://a/announce"}, {"udp://c:80/announce"}}, nil, false)
 
-	merged, changed, _, err := mergeTorrent(existing, incoming, nil)
+	merged, changed, err := mergeTorrent(existing, incoming, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +92,7 @@ func TestMergeNoOpWhenSubset(t *testing.T) {
 	incoming := makeTorrent(t, "",
 		metainfo.AnnounceList{{"http://a/announce"}}, nil, false)
 
-	merged, changed, _, err := mergeTorrent(existing, incoming, nil)
+	merged, changed, err := mergeTorrent(existing, incoming, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +110,7 @@ func TestMergeDefaultTrackersNonPrivate(t *testing.T) {
 	incoming := existing
 	defaults := []string{"udp://open.demonii.com:1337/announce", "http://a/announce"}
 
-	merged, changed, _, err := mergeTorrent(existing, incoming, defaults)
+	merged, changed, err := mergeTorrent(existing, incoming, defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,32 +123,13 @@ func TestMergeDefaultTrackersNonPrivate(t *testing.T) {
 	}
 }
 
-func TestMergeDefaultTrackersSkippedOnPrivate(t *testing.T) {
-	existing := makeTorrent(t, "",
-		metainfo.AnnounceList{{"http://private-tracker/announce"}}, nil, true)
-	incoming := existing
-	defaults := []string{"udp://open.demonii.com:1337/announce"}
-
-	merged, changed, _, err := mergeTorrent(existing, incoming, defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed {
-		t.Fatal("expected no change for private torrent")
-	}
-	trackers, _ := parseAnnounce(t, merged)
-	if len(trackers) != 1 || trackers[0] != "http://private-tracker/announce" {
-		t.Fatalf("expected only private tracker, got %v", trackers)
-	}
-}
-
 func TestMergeUrlList(t *testing.T) {
 	existing := makeTorrent(t, "", metainfo.AnnounceList{{"http://a/announce"}},
 		metainfo.UrlList{"https://web1/"}, false)
 	incoming := makeTorrent(t, "", metainfo.AnnounceList{{"http://a/announce"}},
 		metainfo.UrlList{"https://web1/", "https://web2/"}, false)
 
-	merged, changed, _, err := mergeTorrent(existing, incoming, nil)
+	merged, changed, err := mergeTorrent(existing, incoming, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +149,7 @@ func TestMergePreservesInfoHash(t *testing.T) {
 	exMi, _ := metainfo.Load(bytes.NewReader(existing))
 	exHash := exMi.HashInfoBytes()
 
-	merged, _, _, err := mergeTorrent(existing, incoming, nil)
+	merged, _, err := mergeTorrent(existing, incoming, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,128 +167,42 @@ const (
 	passkeyB = "http://tracker.invalid/announce?passkey=BBB"
 )
 
-// A private torrent's announce URLs carry one user's passkey. A second user's
-// upload must not add theirs: the stored copy is served to everyone who pulls
-// the infohash. Each case stores the first trackers in a different field.
-func TestMergePrivateKeepsFirstTrackers(t *testing.T) {
-	incoming := makeTorrent(t, passkeyB, metainfo.AnnounceList{{passkeyB}}, metainfo.UrlList{"https://web.invalid/BBB/"}, true)
-	for name, existing := range map[string][]byte{
-		"announce":      makeTorrent(t, passkeyA, nil, nil, true),
-		"announce-list": makeTorrent(t, "", metainfo.AnnounceList{{passkeyA}}, nil, true),
-		"url-list":      makeTorrent(t, "", nil, metainfo.UrlList{"https://web.invalid/AAA/"}, true),
-	} {
-		t.Run(name, func(t *testing.T) {
-			merged, changed, _, err := mergeTorrent(existing, incoming, []string{"udp://open.invalid:1337/announce"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if changed {
-				t.Fatal("expected changed=false: a private torrent keeps its first trackers")
-			}
-			if !bytes.Equal(merged, existing) {
-				t.Fatal("expected existing returned verbatim")
-			}
-		})
-	}
-}
-
-// A private torrent stored without any tracker (from a bare magnet) adopts the
-// first upload that has some; a trackerless upload still changes nothing.
-func TestMergePrivateAdoptsTrackersWhenNoneStored(t *testing.T) {
-	existing := makeTorrent(t, "", nil, nil, true)
-
-	same, changed, _, err := mergeTorrent(existing, makeTorrent(t, "", nil, nil, true), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed || !bytes.Equal(same, existing) {
-		t.Fatal("trackerless upload over trackerless copy must change nothing")
-	}
-
-	incoming := makeTorrent(t, passkeyB, metainfo.AnnounceList{{passkeyB}}, metainfo.UrlList{"https://web.invalid/BBB/"}, true)
-	merged, changed, _, err := mergeTorrent(existing, incoming, []string{"udp://open.invalid:1337/announce"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Fatal("expected changed=true: trackerless private copy adopts incoming trackers")
-	}
-	trackers, urls := parseAnnounce(t, merged)
-	if !slices.Equal(trackers, []string{passkeyB}) || !slices.Equal(urls, []string{"https://web.invalid/BBB/"}) {
-		t.Fatalf("expected only incoming trackers and webseeds, got %v %v", trackers, urls)
-	}
-	exMi, _ := metainfo.Load(bytes.NewReader(existing))
-	mergedMi, err := metainfo.Load(bytes.NewReader(merged))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mergedMi.HashInfoBytes() != exMi.HashInfoBytes() {
-		t.Fatal("infohash changed")
-	}
-}
-
-// Copies stored from magnet2torrent before Push dropped the default trackers
-// hold only those. They are not the torrent's own trackers: the first real
-// upload is adopted, and defaults next to real trackers are cleaned out.
-func TestMergePrivateIgnoresDefaultTrackers(t *testing.T) {
-	const open = "udp://open.invalid:1337/announce"
-	defaults := []string{open}
-
-	merged, changed, _, err := mergeTorrent(makeTorrent(t, open, metainfo.AnnounceList{{open}}, nil, true),
-		makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}}, nil, true), defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if trackers, _ := parseAnnounce(t, merged); !changed || !slices.Equal(trackers, []string{passkeyA}) {
-		t.Fatalf("defaults-only copy: changed=%v trackers=%v, want the upload's own", changed, trackers)
-	}
-
-	merged, changed, _, err = mergeTorrent(makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {open}}, nil, true),
-		makeTorrent(t, passkeyB, metainfo.AnnounceList{{passkeyB}}, nil, true), defaults)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if trackers, _ := parseAnnounce(t, merged); !changed || !slices.Equal(trackers, []string{passkeyA}) {
-		t.Fatalf("first trackers plus defaults: changed=%v trackers=%v, want the first only", changed, trackers)
-	}
-}
-
-// held tells keep-first throwing away another upload's trackers apart from a
-// re-push of the same torrent and from a trackerless push, which discard
-// nothing. It is reported whether or not the stored copy was also cleaned,
-// and only for a private torrent: a public merge discards nothing.
-func TestMergeReportsHeld(t *testing.T) {
-	const open = "udp://open.invalid:1337/announce"
-	first := makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}}, nil, true)
-	withDefaults := makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {open}}, nil, true)
-	other := makeTorrent(t, passkeyB, metainfo.AnnounceList{{passkeyB}}, nil, true)
-	cases := []struct {
-		name                  string
-		existing, incoming    []byte
-		wantChanged, wantHeld bool
+// A private copy is info-only: its trackers live in records. Whatever a stored
+// copy still names (a first uploader's lists from before records, or the
+// defaults magnet2torrent left) is cleared, nothing incoming is adopted and no
+// default is added. changed reports that the copy had something to clear.
+func TestMergePrivateClearsStoredLists(t *testing.T) {
+	bare := makeTorrent(t, "", nil, nil, true)
+	upload := makeTorrent(t, passkeyB, metainfo.AnnounceList{{passkeyB}}, metainfo.UrlList{"https://web.invalid/BBB/"}, true)
+	for _, c := range []struct {
+		name     string
+		existing []byte
 	}{
-		{"same upload again", first, first, false, false},
-		{"fewer of the same trackers", first, makeTorrent(t, passkeyA, nil, nil, true), false, false},
-		{"trackerless push", first, makeTorrent(t, "", nil, nil, true), false, false},
-		{"different upload", first, other, false, true},
-		{"different webseed", makeTorrent(t, "", nil, metainfo.UrlList{"https://web.invalid/AAA/"}, true),
-			makeTorrent(t, "", nil, metainfo.UrlList{"https://web.invalid/BBB/"}, true), false, true},
-		{"one tracker of the upload is new", first,
-			makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {passkeyB}}, nil, true), false, true},
-		{"same upload, copy cleaned", withDefaults, first, true, false},
-		{"different upload, copy cleaned", withDefaults, other, true, true},
-		{"trackerless copy adopts upload", makeTorrent(t, "", nil, nil, true), other, true, false},
-		{"public, new tracker", makeTorrent(t, passkeyA, nil, nil, false), makeTorrent(t, passkeyB, nil, nil, false), true, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			_, changed, held, err := mergeTorrent(c.existing, c.incoming, []string{open})
+		{"info-only", bare},
+		{"announce", makeTorrent(t, passkeyA, nil, nil, true)},
+		{"announce-list", makeTorrent(t, "", metainfo.AnnounceList{{passkeyA}}, nil, true)},
+		{"url-list", makeTorrent(t, "", nil, metainfo.UrlList{"https://web.invalid/AAA/"}, true)},
+		{"defaults only", makeTorrent(t, openTracker, metainfo.AnnounceList{{openTracker}}, nil, true)},
+		{"lists and defaults", makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)},
+	} {
+		for in, incoming := range map[string][]byte{"trackerless": bare, "upload": upload} {
+			name := c.name + "/" + in
+			merged, changed, err := mergeTorrent(c.existing, incoming, []string{openTracker})
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("%s: %v", name, err)
 			}
-			if changed != c.wantChanged || held != c.wantHeld {
-				t.Fatalf("changed=%v held=%v, want changed=%v held=%v", changed, held, c.wantChanged, c.wantHeld)
+			if changed != (c.name != "info-only") {
+				t.Fatalf("%s: changed = %v", name, changed)
 			}
-		})
+			if trackers, urls := parseAnnounce(t, merged); len(trackers)+len(urls) != 0 {
+				t.Fatalf("%s: merged copy names %v %v", name, trackers, urls)
+			}
+			if !changed && !bytes.Equal(merged, c.existing) {
+				t.Fatalf("%s: unchanged copy not returned verbatim", name)
+			}
+			if infoHashOf(t, merged) != infoHashOf(t, c.existing) {
+				t.Fatalf("%s: infohash changed", name)
+			}
+		}
 	}
 }
