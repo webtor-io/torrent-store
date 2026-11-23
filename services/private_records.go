@@ -18,11 +18,10 @@ import (
 const (
 	PrivateTrackersKeyFlag         = "private-trackers-key"
 	PrivateTrackersKeyPreviousFlag = "private-trackers-key-previous"
-	PrivateAccessEnforceFlag       = "private-access-enforce"
 )
 
-// RegisterPrivateFlags adds the record keys and the enforce switch. The keys
-// are parsed by privaterecord.ParseKeys; a bad one stops the start.
+// RegisterPrivateFlags adds the record keys. They are parsed by
+// privaterecord.ParseKeys; a bad one stops the start.
 func RegisterPrivateFlags(f []cli.Flag) []cli.Flag {
 	return append(f,
 		cli.StringFlag{
@@ -34,11 +33,6 @@ func RegisterPrivateFlags(f []cli.Flag) []cli.Flag {
 			Name:   PrivateTrackersKeyPreviousFlag,
 			Usage:  "64 hex characters: the key before the last rotation, still accepted to open records",
 			EnvVar: "PRIVATE_TRACKERS_KEY_PREVIOUS",
-		},
-		cli.BoolFlag{
-			Name:   PrivateAccessEnforceFlag,
-			Usage:  "refuse private torrents to callers without a Caller and strip their trackers on every Push",
-			EnvVar: "PRIVATE_ACCESS_ENFORCE",
 		},
 	)
 }

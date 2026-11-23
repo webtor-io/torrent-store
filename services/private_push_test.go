@@ -20,11 +20,11 @@ import (
 )
 
 // privateServer: one fake tier, DEFAULT_TRACKERS = [openTracker], records in obj.
-func privateServer(t *testing.T, enforce bool) (*Server, *fakeProvider, *memObjects) {
+func privateServer(t *testing.T) (*Server, *fakeProvider, *memObjects) {
 	t.Helper()
 	p, obj := newFakeProvider("mem", true), newMemObjects()
 	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, []string{openTracker})
-	srv.SetPrivate(newRecords(obj), enforce)
+	srv.SetPrivate(newRecords(obj))
 	return srv, p, obj
 }
 
@@ -93,7 +93,7 @@ func TestPushWithCallerRefusals(t *testing.T) {
 			if c.off {
 				records = NewPrivateRecords(nil, [][]byte{privaterecord.Vector.Key})
 			}
-			srv.SetPrivate(records, false)
+			srv.SetPrivate(records)
 			_, err := pushAs(srv, c.raw, c.caller, c.mod)
 			wantRefusal(t, err, c.code, c.reason)
 			if len(p.torrents) != 0 || len(obj.objs) != 0 {
@@ -107,7 +107,7 @@ func TestPushWithCallerStripsEveryTier(t *testing.T) {
 	tiers := []*fakeProvider{newFakeProvider("l1", true), newFakeProvider("l2", true), newFakeProvider("s3", true)}
 	srv := NewServer(NewStore([]StoreProvider{tiers[0], tiers[1], tiers[2]}), nil, nil, []string{openTracker})
 	obj := newMemObjects()
-	srv.SetPrivate(newRecords(obj), false)
+	srv.SetPrivate(newRecords(obj))
 	raw := privateTorrent(t, []string{trA, openTracker}, []string{trA2})
 	h := infoHashOf(t, raw)
 	before := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushStripped))
@@ -132,7 +132,7 @@ func TestPushWithCallerStripsEveryTier(t *testing.T) {
 }
 
 func TestPushSecondUploaderGetsOwnRecord(t *testing.T) {
-	srv, _, obj := privateServer(t, false)
+	srv, _, obj := privateServer(t)
 	a, b := privateTorrent(t, []string{trA}), privateTorrent(t, []string{trB})
 	h := infoHashOf(t, a)
 	for _, step := range []struct {
@@ -152,16 +152,58 @@ func TestPushSecondUploaderGetsOwnRecord(t *testing.T) {
 	}
 }
 
-func TestPushWithCallerLeavesFirstUploaderCopy(t *testing.T) {
-	srv, p, _ := privateServer(t, false)
-	raw := privateTorrent(t, []string{trB})
-	h := infoHashOf(t, raw)
-	p.torrents[h] = makeTorrent(t, "", metainfo.AnnounceList{{trA}, {openTracker}}, nil, true) // stored by keep-first before phase 1
-	if r, err := pushAs(srv, raw, &pb.Caller{Uid: uidB}, nil); err != nil || r.GetRecordOutcome() != "inserted" {
-		t.Fatalf("push = %v, %v", r, err)
+// Every write of a private hash is info-only and heals the copy it finds:
+// whatever a push carries and whatever is stored, no tier names a tracker or
+// webseed afterwards. A copy stored by keep-first before records (the first
+// uploader's lists) is cleared by the next push of its hash, of any kind.
+func TestPrivatePushLeavesNoLists(t *testing.T) {
+	seedURL := metainfo.UrlList{"http://seed.example/00000000000000000000000000000000/"}
+	stored := []struct {
+		name string
+		raw  []byte
+	}{
+		{"nothing", nil},
+		{"info-only", privateTorrent(t)},
+		{"first uploader's", makeTorrent(t, trA, metainfo.AnnounceList{{trA}, {trA2}}, nil, true)},
+		{"webseed", makeTorrent(t, "", nil, seedURL, true)},
+		{"defaults", privateTorrent(t, []string{openTracker})},
+		{"lists and defaults", privateTorrent(t, []string{trA}, []string{openTracker})},
 	}
-	if announce, _ := parseAnnounce(t, p.torrents[h]); !reflect.DeepEqual(announce, []string{trA}) {
-		t.Fatalf("copy announce = %v, want the first uploader's only, defaults cleaned", announce)
+	pushes := []struct {
+		name string
+		req  *pb.PushRequest
+	}{
+		{"uid upload", &pb.PushRequest{Torrent: privateTorrent(t, []string{trB}), Caller: &pb.Caller{Uid: uidB}, Source: "site"}},
+		{"uid magnet", &pb.PushRequest{Torrent: privateTorrent(t, []string{trB, openTracker}), Caller: &pb.Caller{Uid: uidB}, Source: "magnet"}},
+		{"no Caller upload", &pb.PushRequest{Torrent: makeTorrent(t, trB, metainfo.AnnounceList{{trB}}, seedURL, true)}},
+		{"no Caller magnet", &pb.PushRequest{Torrent: privateTorrent(t, []string{openTracker})}},
+		{"no Caller trackerless", &pb.PushRequest{Torrent: privateTorrent(t)}},
+	}
+	for _, s := range stored {
+		for _, push := range pushes {
+			name := s.name + "/" + push.name
+			tiers := []*fakeProvider{newFakeProvider("l1", true), newFakeProvider("l2", true), newFakeProvider("s3", true)}
+			srv := NewServer(NewStore([]StoreProvider{tiers[0], tiers[1], tiers[2]}), nil, nil, []string{openTracker})
+			srv.SetPrivate(newRecords(newMemObjects()))
+			h := infoHashOf(t, push.req.GetTorrent())
+			for _, p := range tiers {
+				if s.raw != nil {
+					p.torrents[h] = s.raw
+				}
+			}
+			if _, err := srv.Push(ctx, push.req); err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			for _, p := range tiers {
+				got, ok := p.torrents[h]
+				if !ok {
+					t.Fatalf("%s: %s holds no copy", name, p.name)
+				}
+				if announce, webseeds := parseAnnounce(t, got); len(announce)+len(webseeds) != 0 || bytes.Contains(got, []byte("://")) || infoHashOf(t, got) != h {
+					t.Fatalf("%s: %s stored %v %v", name, p.name, announce, webseeds)
+				}
+			}
+		}
 	}
 }
 
@@ -169,7 +211,7 @@ func TestPushWithCallerPullDurableErrorWritesNothing(t *testing.T) {
 	p := &failingPullProvider{newFakeProvider("mem", true)}
 	srv := NewServer(NewStore([]StoreProvider{p}), nil, nil, nil)
 	obj := newMemObjects()
-	srv.SetPrivate(newRecords(obj), false)
+	srv.SetPrivate(newRecords(obj))
 	_, err := pushAs(srv, privateTorrent(t, []string{trA}), &pb.Caller{Uid: uidA}, nil)
 	wantRefusal(t, err, codes.Unavailable, "")
 	if len(p.torrents) != 0 || len(obj.objs) != 0 {
@@ -178,7 +220,7 @@ func TestPushWithCallerPullDurableErrorWritesNothing(t *testing.T) {
 }
 
 func TestPushDryRun(t *testing.T) {
-	srv, p, obj := privateServer(t, false)
+	srv, p, obj := privateServer(t)
 	a, a2 := privateTorrent(t, []string{trA}), privateTorrent(t, []string{trA2})
 	outcome := func(raw []byte, mod func(*pb.PushRequest)) string {
 		t.Helper()
@@ -218,7 +260,7 @@ func TestPushDryRun(t *testing.T) {
 
 // Old m2t returns [[tr..., DEFAULT_TRACKERS]], new m2t [[tr...]]: the same trackers, so the record is unchanged.
 func TestPushMagnetPayloadShapesUnchanged(t *testing.T) {
-	srv, _, _ := privateServer(t, false)
+	srv, _, _ := privateServer(t)
 	magnet := func(r *pb.PushRequest) { r.Source = "magnet" }
 	old, cur := privateTorrent(t, []string{trA, trB, openTracker}), privateTorrent(t, []string{trA, trB})
 	for _, c := range []struct {
@@ -233,7 +275,7 @@ func TestPushMagnetPayloadShapesUnchanged(t *testing.T) {
 }
 
 func TestPushPublicWithCallerAsToday(t *testing.T) {
-	srv, p, obj := privateServer(t, true)
+	srv, p, obj := privateServer(t)
 	raw := makeTorrent(t, trA, nil, nil, false)
 	r, err := pushAs(srv, raw, &pb.Caller{Uid: uidA}, nil)
 	if err != nil || r.GetRecordOutcome() != "" || len(obj.ops) != 0 {
@@ -244,29 +286,27 @@ func TestPushPublicWithCallerAsToday(t *testing.T) {
 	}
 }
 
+// A push without Caller is stripped like any other and writes no record.
 func TestPushWithoutCaller(t *testing.T) {
-	for _, enforce := range []bool{false, true} {
-		srv, p, obj := privateServer(t, enforce)
-		raw := privateTorrent(t, []string{trA})
-		before := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushStripped))
-		r, err := srv.Push(ctx, &pb.PushRequest{Torrent: raw})
-		if err != nil || r.GetRecordOutcome() != "" || len(obj.ops) != 0 {
-			t.Fatalf("enforce=%v: %v, %v, ops %q", enforce, r, err, obj.ops)
-		}
-		announce, _ := parseAnnounce(t, p.torrents[infoHashOf(t, raw)])
-		if kept := len(announce) > 0; kept == enforce {
-			t.Fatalf("enforce=%v: stored announce %v", enforce, announce)
-		}
-		if d := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushStripped)) - before; d != map[bool]float64{false: 0, true: 1}[enforce] {
-			t.Fatalf("enforce=%v: stripped delta %v", enforce, d)
-		}
+	srv, p, obj := privateServer(t)
+	raw := privateTorrent(t, []string{trA})
+	before := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushStripped))
+	r, err := srv.Push(ctx, &pb.PushRequest{Torrent: raw})
+	if err != nil || r.GetRecordOutcome() != "" || len(obj.ops) != 0 {
+		t.Fatalf("%v, %v, ops %q", r, err, obj.ops)
+	}
+	if announce, _ := parseAnnounce(t, p.torrents[infoHashOf(t, raw)]); len(announce) != 0 {
+		t.Fatalf("stored announce %v", announce)
+	}
+	if d := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushStripped)) - before; d != 1 {
+		t.Fatalf("stripped delta %v", d)
 	}
 }
 
-// stripped stands for stored, merged, kept and held only: a copy that does not
+// stripped stands for stored, merged and kept only: a copy that does not
 // load is still overwritten blind, and that stays visible.
 func TestPushStrippedLeavesBlind(t *testing.T) {
-	srv, p, _ := privateServer(t, false)
+	srv, p, _ := privateServer(t)
 	raw := privateTorrent(t, []string{trA})
 	p.torrents[infoHashOf(t, raw)] = []byte("not a torrent")
 	before := pushSeries()
@@ -286,7 +326,7 @@ func TestPushStrippedLeavesBlind(t *testing.T) {
 func TestPushRecordLogLine(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
-	srv, _, _ := privateServer(t, false)
+	srv, _, _ := privateServer(t)
 	raw := privateTorrent(t, []string{trA})
 	_, _ = pushAs(srv, raw, &pb.Caller{Uid: uidB}, func(r *pb.PushRequest) { r.Source = "rapidapi" })
 	_, _ = pushAs(srv, raw, &pb.Caller{}, nil)
@@ -336,7 +376,7 @@ func recordLine(t *testing.T, hook *logtest.Hook) *logrus.Entry {
 func TestPushRecordLogLineBounded(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
-	srv, _, _ := privateServer(t, false)
+	srv, _, _ := privateServer(t)
 
 	long := "http://" + strings.Repeat("a", 3000) + ".example/announce"
 	_, _ = pushAs(srv, privateTorrent(t, []string{long}), &pb.Caller{Uid: uidA}, nil)
@@ -366,7 +406,7 @@ func TestPushRecordLogLineBounded(t *testing.T) {
 func TestPushRecordFailsAfterCopy(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
-	srv, p, obj := privateServer(t, false)
+	srv, p, obj := privateServer(t)
 	obj.failOn("get", "private/", errors.New("down"))
 	raw := privateTorrent(t, []string{trA})
 	if _, err := pushAs(srv, raw, &pb.Caller{Uid: uidA}, nil); status.Code(err) != codes.Unavailable {
@@ -381,7 +421,7 @@ func TestPushRecordFailsAfterCopy(t *testing.T) {
 }
 
 func TestPrivatePushCounted(t *testing.T) {
-	srv, _, _ := privateServer(t, false)
+	srv, _, _ := privateServer(t)
 	before := pushSeries()
 	_, _ = pushAs(srv, privateTorrent(t), &pb.Caller{Uid: uidA}, nil)                // private_no_tracker
 	_, _ = pushAs(srv, privateTorrent(t, []string{trA}), &pb.Caller{Uid: uidA}, dry) // not counted

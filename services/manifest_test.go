@@ -370,7 +370,7 @@ func TestFilesRebuildsManifestWithoutPrivate(t *testing.T) {
 	p.torrents[h] = raw
 	old, _ := proto.Marshal(&pb.FilesReply{Name: "test"})
 	p.manifests[h] = append([]byte(manifestStamp("")), old...) // the stamp Files wrote before this change, no stoplist
-	r, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h})
+	r, err := srv.Files(context.Background(), &pb.FilesRequest{InfoHash: h, Caller: &pb.Caller{Internal: true}})
 	if err != nil || r.Private == nil || !r.GetPrivate() {
 		t.Fatalf("Files = %v, %v; want Private=true", r, err)
 	}

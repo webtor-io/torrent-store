@@ -37,7 +37,7 @@ type TorrentStoreClient interface {
 	// Pulls torrent from the store. A private torrent pulled with Caller.uid
 	// comes with the trackers of that uid's record and caller_trackers set;
 	// every other pull returns the stored copy, without trackers for a private
-	// torrent under PRIVATE_ACCESS_ENFORCE.
+	// torrent, and a private torrent pulled without Caller is refused.
 	Pull(ctx context.Context, in *PullRequest, opts ...grpc.CallOption) (*PullReply, error)
 	// Touch torrent in the store
 	Touch(ctx context.Context, in *TouchRequest, opts ...grpc.CallOption) (*TouchReply, error)
@@ -145,7 +145,7 @@ type TorrentStoreServer interface {
 	// Pulls torrent from the store. A private torrent pulled with Caller.uid
 	// comes with the trackers of that uid's record and caller_trackers set;
 	// every other pull returns the stored copy, without trackers for a private
-	// torrent under PRIVATE_ACCESS_ENFORCE.
+	// torrent, and a private torrent pulled without Caller is refused.
 	Pull(context.Context, *PullRequest) (*PullReply, error)
 	// Touch torrent in the store
 	Touch(context.Context, *TouchRequest) (*TouchReply, error)

@@ -1,7 +1,6 @@
 package services
 
 import (
-	"bytes"
 	"context"
 	"strings"
 	"time"
@@ -65,7 +64,6 @@ type Server struct {
 	// ponytail: per pod, a repeat landing on another pod resolves once more.
 	refused *lazymap.LazyMap[bool]
 	p       *PrivateRecords // nil until SetPrivate: private records unavailable
-	enforce bool            // PRIVATE_ACCESS_ENFORCE
 }
 
 func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Server {
@@ -87,17 +85,10 @@ func NewServer(s *Store, a *Abuse, sl *Stoplist, defaultTrackers []string) *Serv
 	return srv
 }
 
-// SetPrivate gives the server its private records and the enforce mode.
-// NewServer stays as it was: a server never given records has none
-// available, and Available is false on the nil it keeps.
-func (s *Server) SetPrivate(r *PrivateRecords, enforce bool) {
-	s.p, s.enforce = r, enforce
-	v := 0.0
-	if enforce {
-		v = 1
-	}
-	privateEnforce.Set(v)
-}
+// SetPrivate gives the server its private records. NewServer stays as it
+// was: a server never given records has none available, and Available is
+// false on the nil it keeps.
+func (s *Server) SetPrivate(r *PrivateRecords) { s.p = r }
 
 func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, error) {
 	t := time.Now()
@@ -139,15 +130,16 @@ func (s *Server) Pull(ctx context.Context, in *pb.PullRequest) (*pb.PullReply, e
 		}
 		switch {
 		// Allowed for a uid means by its record: the reply carries that
-		// record's trackers and nothing of the stored copy, enforce or not.
+		// record's trackers and nothing of the stored copy.
 		case c.GetUid() != "" && !c.GetInternal():
 			if torrent, err = withTiers(pt.mi, tiers); err != nil {
 				return nil, errors.Wrapf(err, "failed to set caller trackers infoHash=%v", in.GetInfoHash())
 			}
 			reply.CallerTrackers = true
-		// Under enforce a copy stored by keep-first before records existed
-		// still names the first uploader's trackers: they never leave by Pull.
-		case s.enforce:
+		// Every write of a private copy is info-only, but a copy stored by
+		// keep-first before records can still sit in a tier until it is
+		// rewritten: its trackers never leave by Pull.
+		default:
 			if torrent, err = infoOnly(pt.mi); err != nil {
 				return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", in.GetInfoHash())
 			}
@@ -240,49 +232,34 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 	}
 
 	// A private torrent's trackers are never stored in the copy every caller
-	// pulls once they go to a record. Without a Caller the push came from an
-	// old caller: until enforce it keeps today's keep-first, because stripping
-	// would leave a new private hash with neither trackers nor a record.
-	strip := private && (c != nil || s.enforce)
+	// pulls: a Caller's go to its record, and a push without one keeps none.
 	payload := in.GetTorrent()
-	if strip {
+	if private {
 		if payload, err = infoOnly(pt.mi); err != nil {
 			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to strip trackers")
 			return nil, errors.Wrapf(err, "failed to strip trackers infoHash=%v", infoHash)
 		}
-	} else if mi := *pt.mi; private && dropTrackers(&mi, s.defaultTrackers) {
-		var buf bytes.Buffer
-		if err := mi.Write(&buf); err != nil {
-			hLog.WithField("duration", time.Since(t)).WithError(err).Error("failed to drop default trackers")
-			return nil, errors.Wrapf(err, "failed to drop default trackers infoHash=%v", infoHash)
-		}
-		payload = buf.Bytes()
-		hLog.Info("dropped default trackers from private torrent")
 	}
 	var existing []byte
 	write := true
 	if private {
-		// Keep-first has to see the copy every pod shares: a pod-local L1
-		// can still hold a trackerless copy, and the miss rate limiter
-		// answers ErrNotFound — either would let this push write blind.
-		// ponytail: two first pushes racing on different pods can leave
-		// tiers holding different uploads; a conditional S3 PUT would close
-		// it if two users ever hit the same new private infohash at once.
+		// mergeTorrent clears a copy stored with lists before records, so it
+		// has to see the copy every pod shares: a pod-local L1 can hold an
+		// info-only copy while S3 still has the old one.
 		existing, err = s.s.pullDurable(ctx, infoHash)
 	} else {
 		existing, err = s.s.pull(ctx, infoHash, 0)
 	}
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		if private {
-			// A blind write would replace the first uploader's trackers,
-			// or erase them, which is what mergeTorrent keeps from happening.
+			// Unavailable rather than a write over a copy nobody has seen.
 			hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to read existing private torrent; refusing to push")
 			return nil, status.Errorf(codes.Unavailable, "failed to read existing torrent infoHash=%v: %v", infoHash, err)
 		}
 		hLog.WithField("duration", time.Since(t)).WithError(err).Warn("failed to read existing for merge; pushing as-is")
 		outcome = pushBlind
 	} else if err == nil {
-		merged, changed, held, mErr := mergeTorrent(existing, payload, s.defaultTrackers)
+		merged, changed, mErr := mergeTorrent(existing, payload, s.defaultTrackers)
 		if mErr != nil {
 			hLog.WithField("duration", time.Since(t)).WithError(mErr).Warn("failed to merge; pushing incoming as-is")
 			outcome = pushBlind
@@ -291,17 +268,9 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 			hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent already present, no new announces — skipping push")
 			write = false
 			outcome = pushKept
-			if held {
-				outcome = pushHeld
-			}
 		} else {
 			payload = merged
 			outcome = pushMerged
-			if held {
-				// The copy was cleaned of default trackers as well; the
-				// discarded upload is what this push is counted for.
-				outcome = pushHeld
-			}
 			// The payload differs from what pushm may have cached for this
 			// infoHash minutes ago; without the drop the cached `true` would
 			// swallow the write and the merged announces would be lost.
@@ -319,7 +288,7 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		s.s.pullm.Drop(infoHash)
 		hLog.WithField("len", len(payload)).WithField("duration", time.Since(t)).Info("torrent successfully pushed")
 	}
-	if strip && hasTrackers(pt.mi) && outcome != pushBlind {
+	if private && hasTrackers(pt.mi) && outcome != pushBlind {
 		outcome = pushStripped
 	}
 
@@ -508,11 +477,11 @@ func (s *Server) Touch(ctx context.Context, in *pb.TouchRequest) (*pb.TouchReply
 		return nil, rpcError(err, hLog, t, infoHash, "failed to touch torrent")
 	}
 
-	// internal is always allowed and a call without Caller is until enforce:
-	// neither reads the manifest, so both stay as cheap as before.
+	// internal is always allowed and reads no manifest, so it stays as cheap
+	// as before. A call without Caller is refused a private hash like anon.
 	c := in.GetCaller()
 	reply := &pb.TouchReply{}
-	if !c.GetInternal() && (c != nil || s.enforce) {
+	if !c.GetInternal() {
 		m, err := s.manifest(ctx, infoHash, hLog, t)
 		if err != nil {
 			return nil, err

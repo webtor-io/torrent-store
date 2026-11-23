@@ -24,7 +24,7 @@ func wantRefusal(t *testing.T, err error, code codes.Code, reason string) {
 // recordsServer is a Server whose private records live in obj.
 func recordsServer(obj *memObjects) *Server {
 	srv := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, nil, nil)
-	srv.SetPrivate(newRecords(obj), false)
+	srv.SetPrivate(newRecords(obj))
 	return srv
 }
 
@@ -37,7 +37,7 @@ func seedRecord(t *testing.T, obj *memObjects, h, uid string, tiers [][]string) 
 }
 
 func TestRecordRPCsRejectMalformedIDs(t *testing.T) {
-	srv, p, obj := privateServer(t, false)
+	srv, p, obj := privateServer(t)
 	h := seedPrivate(t, srv, p, true)
 	mark := len(obj.ops)
 	for _, bad := range []string{"", strings.ToUpper(uidA), "../" + uidA[3:], uidA + "/", uidA[:39]} {

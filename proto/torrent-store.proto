@@ -9,7 +9,7 @@ service TorrentStore {
   // Pulls torrent from the store. A private torrent pulled with Caller.uid
   // comes with the trackers of that uid's record and caller_trackers set;
   // every other pull returns the stored copy, without trackers for a private
-  // torrent under PRIVATE_ACCESS_ENFORCE.
+  // torrent, and a private torrent pulled without Caller is refused.
   rpc Pull (PullRequest) returns (PullReply) {}
 
   // Touch torrent in the store
@@ -37,7 +37,8 @@ service TorrentStore {
 
 // Caller is declared by the caller; there is no gRPC auth. uid is verified by
 // the caller and is ^[0-9a-f]{40}$ or empty. A request without Caller comes
-// from an old caller.
+// from an old caller: Pull, Files and Touch refuse it a private torrent
+// (sign_in), and Push stores a private one without trackers.
 message Caller {
   string uid    = 1;
   bool internal = 2;

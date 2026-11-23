@@ -43,11 +43,39 @@ OPTIONS:
    --stoplist-path value               stoplist path [$STOPLIST_PATH]
 ```
 
+## Private torrents
+
+A torrent with the BEP 27 `private` flag is stored info-only: a Push drops its
+announce, announce-list and url-list before it writes, and a Push that finds an
+older S3 copy still carrying lists rewrites that copy without them. A Push
+heals only the durable S3 copy; a list-carrying Redis or Badger copy above an
+info-only S3 copy stays until it expires or `private-rewrite` and a restart
+clear it (below).
+
+A private Push with a `Caller` keeps that user's trackers in a sealed record
+(`private/<uid>/<hash>` in S3), which needs `PRIVATE_TRACKERS_KEY` and S3.
+Without them the Push is refused with `private_unavailable`, and a `Caller`
+without a uid gets `private_needs_account`; nothing is stored then.
+
+Pull, Files and Touch of a private torrent decide by the caller:
+
+- no `Caller` at all: refused, `sign_in`;
+- `Caller.internal`: allowed; Pull returns the info-only copy;
+- records off (no key or no S3): every other caller is refused,
+  `private_unavailable`;
+- `Caller` without a uid: refused, `sign_in`;
+- `Caller.uid` with a record: allowed; Pull returns the copy with that record's
+  trackers and `caller_trackers` set;
+- `Caller.uid` without a record: refused, `no_record`.
+
+This is the only mode. The `PRIVATE_ACCESS_ENFORCE` switch of earlier releases
+is gone, and the variable is ignored if still set.
+
 ## Stripping trackers from stored private torrents
 
 A private torrent's announce, announce-list and url-list carry the uploader's
-passkey. A private Push stores info-only metainfo, but copies stored before
-that still hold the first uploader's lists. `private-rewrite` rewrites each
+passkey. A private Push stores info-only metainfo (above), but copies stored
+before phase 4 still hold the first uploader's lists. `private-rewrite` rewrites each
 such S3 object in place as info-only (same key, same infohash) and deletes its
 Redis copy, so the next Pull backfills the clean one.
 
@@ -99,7 +127,9 @@ kubectl -n webtor exec -it deploy/torrent-store -- env GOMEMLIMIT=256MiB /server
 
 ## Client usage
 
-It is connecting to local server instance localhost:50051.
+It is connecting to local server instance localhost:50051. It sends no
+`Caller`: a private torrent it pushes is stored without trackers, and pulling
+or touching one is refused.
 
 ```
 % ./client help

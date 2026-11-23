@@ -29,12 +29,11 @@ func TestMain(m *testing.M) {
 		testutil.CollectAndCompare(privateAccessTotal, strings.NewReader(`
 # HELP torrent_store_private_access_total Access decisions on private torrents by caller class and outcome.
 # TYPE torrent_store_private_access_total counter
-torrent_store_private_access_total{caller="legacy",outcome="allowed"} 0
 torrent_store_private_access_total{caller="legacy",outcome="sign_in"} 0
 torrent_store_private_access_total{caller="uid",outcome="unreadable"} 0
 `)),
 		testutil.CollectAndCompare(pushTotal, strings.NewReader(`
-# HELP torrent_store_push_total Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, held, stripped, blind, refused, malformed, error).
+# HELP torrent_store_push_total Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, stripped, blind, refused, malformed, error).
 # TYPE torrent_store_push_total counter
 torrent_store_push_total{outcome="stripped",private="true"} 0
 `)),
@@ -45,6 +44,14 @@ torrent_store_push_total{outcome="stripped",private="true"} 0
 func TestSeriesBornAtZero(t *testing.T) {
 	if bornAtZero != nil {
 		t.Fatal(bornAtZero)
+	}
+}
+
+// Enforce is the only mode, so the gauge that reported it is gone: a series
+// stuck at a constant would only mislead the dashboards that read it.
+func TestNoEnforceGauge(t *testing.T) {
+	if n, err := testutil.GatherAndCount(prometheus.DefaultGatherer, "torrent_store_private_enforce"); err != nil || n != 0 {
+		t.Fatalf("torrent_store_private_enforce: %d series, %v", n, err)
 	}
 }
 
@@ -195,7 +202,7 @@ func TestGRPCHandledTotal(t *testing.T) {
 	okBefore := handledTotal(t, "Touch", codes.OK)
 	nfBefore := handledTotal(t, "Touch", codes.NotFound)
 
-	if _, err := cl.Touch(context.Background(), &pb.TouchRequest{InfoHash: h}); err != nil {
+	if _, err := cl.Touch(context.Background(), &pb.TouchRequest{InfoHash: h, Caller: &pb.Caller{Internal: true}}); err != nil {
 		t.Fatalf("Touch(present): %v", err)
 	}
 	_, err = cl.Touch(context.Background(), &pb.TouchRequest{InfoHash: "feed0000"})
@@ -246,7 +253,7 @@ func handledTotal(t *testing.T, method string, code codes.Code) float64 {
 func pushSeries() map[string]float64 {
 	out := map[string]float64{}
 	for _, private := range []bool{false, true} {
-		for _, o := range []string{pushStored, pushMerged, pushKept, pushHeld, pushStripped, pushBlind, pushRefused, pushMalformed, pushError} {
+		for _, o := range []string{pushStored, pushMerged, pushKept, pushStripped, pushBlind, pushRefused, pushMalformed, pushError} {
 			p := strconv.FormatBool(private)
 			out[p+"/"+o] = testutil.ToFloat64(pushTotal.WithLabelValues(p, o))
 		}
@@ -324,7 +331,13 @@ func TestPushOutcomesCounted(t *testing.T) {
 			srv, _ := mem(nil)
 			return srv, makeTorrent(t, trackerA, nil, nil, false)
 		}},
+		// A private push stores info-only: lists the upload carried make it
+		// stripped, whatever happened to the copy.
 		{"private, nothing stored", true, pushStored, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, _ := mem(nil)
+			return srv, makeTorrent(t, "", nil, nil, true)
+		}},
+		{"private, upload stripped", true, pushStripped, codes.OK, func(t *testing.T) (*Server, []byte) {
 			srv, _ := mem(nil)
 			return srv, makeTorrent(t, passkeyA, nil, nil, true)
 		}},
@@ -333,44 +346,23 @@ func TestPushOutcomesCounted(t *testing.T) {
 			pushed(t, srv, makeTorrent(t, trackerA, nil, nil, false))
 			return srv, makeTorrent(t, trackerA, metainfo.AnnounceList{{trackerA}, {trackerB}}, nil, false)
 		}},
-		{"private, trackerless copy adopts upload", true, pushMerged, codes.OK, func(t *testing.T) (*Server, []byte) {
-			srv, _ := mem([]string{openTracker})
-			pushed(t, srv, makeTorrent(t, openTracker, nil, nil, true))
-			return srv, makeTorrent(t, passkeyA, nil, nil, true)
+		// A copy stored with lists before every private write was info-only
+		// (keep-first, or defaults from magnet2torrent) is cleared.
+		{"private, old copy cleared", true, pushMerged, codes.OK, func(t *testing.T) (*Server, []byte) {
+			srv, p := mem([]string{openTracker})
+			raw := makeTorrent(t, "", nil, nil, true)
+			p.torrents[infoHashOf(t, raw)] = makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)
+			return srv, raw
 		}},
 		{"public, nothing new", false, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
 			srv, _ := mem(nil)
 			pushed(t, srv, makeTorrent(t, trackerA, nil, nil, false))
 			return srv, makeTorrent(t, trackerA, nil, nil, false)
 		}},
-		{"private, same upload again", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
-			srv, _ := mem(nil)
-			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
-			return srv, makeTorrent(t, passkeyA, nil, nil, true)
-		}},
-		{"private, trackerless push of stored copy", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
+		{"private, info-only copy kept", true, pushKept, codes.OK, func(t *testing.T) (*Server, []byte) {
 			srv, _ := mem(nil)
 			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
 			return srv, makeTorrent(t, "", nil, nil, true)
-		}},
-		{"private, keep-first holds another upload", true, pushHeld, codes.OK, func(t *testing.T) (*Server, []byte) {
-			srv, _ := mem(nil)
-			pushed(t, srv, makeTorrent(t, passkeyA, nil, nil, true))
-			return srv, makeTorrent(t, passkeyB, nil, nil, true)
-		}},
-		// A copy stored before Push dropped default trackers is rewritten
-		// without them; whether the upload was thrown away decides the outcome.
-		{"private, same upload, stored copy cleaned", true, pushMerged, codes.OK, func(t *testing.T) (*Server, []byte) {
-			srv, p := mem([]string{openTracker})
-			raw := makeTorrent(t, passkeyA, nil, nil, true)
-			p.torrents[infoHashOf(t, raw)] = makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)
-			return srv, raw
-		}},
-		{"private, another upload, stored copy cleaned", true, pushHeld, codes.OK, func(t *testing.T) (*Server, []byte) {
-			srv, p := mem([]string{openTracker})
-			raw := makeTorrent(t, passkeyB, nil, nil, true)
-			p.torrents[infoHashOf(t, raw)] = makeTorrent(t, passkeyA, metainfo.AnnounceList{{passkeyA}, {openTracker}}, nil, true)
-			return srv, raw
 		}},
 		{"public, stored copy unreadable", false, pushBlind, codes.OK, func(t *testing.T) (*Server, []byte) {
 			p := &failingPullProvider{newFakeProvider("mem", true)}

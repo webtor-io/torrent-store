@@ -23,7 +23,8 @@ const (
 
 // Caller is declared by the caller; there is no gRPC auth. uid is verified by
 // the caller and is ^[0-9a-f]{40}$ or empty. A request without Caller comes
-// from an old caller.
+// from an old caller: Pull, Files and Touch refuse it a private torrent
+// (sign_in), and Push stores a private one without trackers.
 type Caller struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`

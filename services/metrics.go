@@ -30,15 +30,11 @@ const (
 	manifestRebuilt = "rebuilt" // a tier held one, the caller rejected it (stale stamp)
 )
 
-// Push outcomes, see Server.Push. Under private="true", kept is a push that
-// changed nothing and lost nothing: the copy already has every tracker it
-// names (the same torrent again, or a bare magnet resolved with none), while
-// held is keep-first throwing away trackers a different upload carried.
-// merged is a stored copy cleaned of default trackers or adopting an
-// upload's because it had none. blind is the write mergeTorrent exists to
-// prevent for a private torrent. stripped is a private push that carried
-// announce lists and stored an info-only copy (with a Caller, or without one
-// under enforce); it stands for stored, merged, kept or held, never for blind.
+// Push outcomes, see Server.Push. Under private="true" every write is
+// info-only: kept is a push onto a copy that already is, merged a push that
+// cleared a copy stored with lists before records. blind is a write over a
+// copy that could not be merged. stripped is a private push that carried
+// announce lists; it stands for stored, merged or kept, never for blind.
 //
 // "Write requested" is all the metric can say: Store.Push goes through pushm,
 // which shares one in-flight write per infohash and answers a repeat from
@@ -46,9 +42,8 @@ const (
 // push's or skipped. These count requests, not provider writes.
 const (
 	pushStored    = "stored"    // no stored copy found; a write of the incoming torrent was requested
-	pushMerged    = "merged"    // the merge changed the stored copy and discarded nothing; a write was requested
-	pushKept      = "kept"      // the stored copy stays as it was and nothing incoming was discarded; no write
-	pushHeld      = "held"      // private only: incoming trackers the copy lacks were discarded; a write only if the copy was cleaned
+	pushMerged    = "merged"    // the merge changed the stored copy (public: lists grew; private: lists cleared); a write was requested
+	pushKept      = "kept"      // the stored copy stays as it was; no write
 	pushStripped  = "stripped"  // private: announce lists the bytes carried were not stored
 	pushBlind     = "blind"     // the stored copy could not be read or merged; a write of the incoming torrent as-is was requested
 	pushRefused   = "refused"   // PermissionDenied, or a refusal carrying ErrorInfo: stoplist, infohash or payload ban, private record checks
@@ -105,7 +100,7 @@ var (
 	// not counted; it shows in grpc_server_handled_total as InvalidArgument.
 	pushTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "torrent_store_push_total",
-		Help: "Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, held, stripped, blind, refused, malformed, error).",
+		Help: "Push calls whose torrent parsed, dry_run aside, by private flag and outcome (stored, merged, kept, stripped, blind, refused, malformed, error).",
 	}, []string{"private", "outcome"})
 
 	// privateAccessTotal counts Server.access: caller legacy (no Caller),
@@ -115,11 +110,6 @@ var (
 		Name: "torrent_store_private_access_total",
 		Help: "Access decisions on private torrents by caller class and outcome.",
 	}, []string{"caller", "outcome"})
-
-	privateEnforce = promauto.NewGauge(prometheus.GaugeOpts{
-		Name: "torrent_store_private_enforce",
-		Help: "1 when PRIVATE_ACCESS_ENFORCE is on.",
-	})
 )
 
 func init() {
@@ -129,7 +119,6 @@ func init() {
 	// Phase 3 is judged on stripped private pushes: the series exists at 0.
 	pushTotal.WithLabelValues("true", pushStripped)
 	// Read by the phase gates (legacy) and PrivateRecordsBad (unreadable).
-	privateAccessTotal.WithLabelValues("legacy", "allowed")
 	privateAccessTotal.WithLabelValues("legacy", "sign_in")
 	privateAccessTotal.WithLabelValues("uid", "unreadable")
 }

@@ -19,9 +19,9 @@ import (
 func TestNoPlaintextInLogsOrErrors(t *testing.T) {
 	hook := logtest.NewGlobal()
 	defer hook.Reset()
-	srv, _, obj := privateServer(t, true)
+	srv, _, obj := privateServer(t)
 	off := NewServer(NewStore([]StoreProvider{newFakeProvider("mem", true)}), nil, nil, []string{openTracker})
-	off.SetPrivate(NewPrivateRecords(nil, [][]byte{privaterecord.Vector.Key}), true)
+	off.SetPrivate(NewPrivateRecords(nil, [][]byte{privaterecord.Vector.Key}))
 	raw := privateTorrent(t, []string{trA})
 	h := infoHashOf(t, raw)
 	var errs []error

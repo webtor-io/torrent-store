@@ -181,13 +181,10 @@ func unavailable(err error) error {
 // access decides whether caller c may read private torrent h. A nil error means
 // allowed; a uid is allowed by its record, whose tiers come back from the same
 // read. Called only for private torrents. Without a Caller the call came from
-// an old caller: allowed until enforce. An S3 error is Unavailable, never no_record.
+// an old caller: sign_in, as for anon. An S3 error is Unavailable, never no_record.
 func (s *Server) access(ctx context.Context, h string, c *pb.Caller) ([][]string, error) {
 	count := func(caller, outcome string) { privateAccessTotal.WithLabelValues(caller, outcome).Inc() }
 	switch {
-	case c == nil && !s.enforce:
-		count("legacy", "allowed")
-		return nil, nil
 	case c == nil:
 		count("legacy", "sign_in")
 		return nil, refusal(codes.PermissionDenied, reasonSignIn, msgSignIn)

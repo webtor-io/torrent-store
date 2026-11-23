@@ -113,7 +113,7 @@ func serve(c *cli.Context) (err error) {
 
 	// Setting Server
 	server := s.NewServer(store, abuse, stoplist, s.ParseDefaultTrackers(c))
-	server.SetPrivate(records, c.Bool(s.PrivateAccessEnforceFlag))
+	server.SetPrivate(records)
 
 	// Setting GRPC Server
 	grpcServer := s.NewGRPCServer(c, server)
