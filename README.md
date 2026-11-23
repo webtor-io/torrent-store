@@ -43,6 +43,53 @@ OPTIONS:
    --stoplist-path value               stoplist path [$STOPLIST_PATH]
 ```
 
+## Stripping trackers from stored private torrents
+
+A private torrent's announce, announce-list and url-list carry the uploader's
+passkey. A private Push stores info-only metainfo, but copies stored before
+that still hold the first uploader's lists. `private-rewrite` rewrites each
+such S3 object in place as info-only (same key, same infohash) and deletes its
+Redis copy, so the next Pull backfills the clean one.
+
+- Dry run unless `--write`: without it nothing is written anywhere.
+- Only the bucket root is listed (delimiter `/`), so `<hash>` objects are read
+  and private records under `private/` are never listed or read. No
+  `PRIVATE_TRACKERS_KEY` is needed.
+- stdout: one JSON object of counts at the end, also on Ctrl-C or SIGTERM.
+  stderr: a progress line every `--progress-every` torrents and one
+  `key<TAB>op<TAB>class` line per failure. Neither ever carries a body, a URL
+  or a host.
+
+Run it in a serving pod, which already has the S3 and Redis environment, so
+nobody handles credentials:
+
+```
+# 1. size of the bucket: counts keys, reads nothing
+kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite --list-only
+# 2. dry run: what --write would change
+kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite
+# 3. ONLY after the owner's go-ahead
+kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite --write
+# 4. Badger is per pod and out of the tool's reach: restart to flush it
+kubectl -n webtor rollout restart deploy/torrent-store
+# 5. verify: private_with_lists and redis_with_lists are 0
+kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite
+```
+
+- The tool shares the pod's memory limit with the server: an OOM kills the
+  server too. Keep `GOMEMLIMIT` and the default `--concurrency 4`.
+- `--limit N` bounds a run; `--start-after <last_key>` resumes one. `last_key`
+  only moves past finished listing pages, so resuming re-reads at most one
+  page. Ctrl-C reaches the process only through `kubectl exec -it`; without a
+  TTY, take `last_key` from the last progress line.
+- Run `--write` only on an image whose Push stores every private copy
+  info-only. On an older image a concurrent Push of the same private hash can
+  write the old copy back; step 5 shows it.
+- **Old copies survive outside the live objects.** If the JSON reports
+  `"versioning": "Enabled"` or `"Suspended"`, earlier object versions still
+  hold the lists, and so does any S3 backup or replica. The rewrite does not
+  touch them.
+
 ## Client usage
 
 It is connecting to local server instance localhost:50051.
