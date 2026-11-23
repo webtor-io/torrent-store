@@ -32,6 +32,7 @@ type fakeBucket struct {
 	gets, puts []string
 	getErr     map[string]error
 	putErr     error
+	versErr    error
 	onGet      func(key string)
 }
 
@@ -83,17 +84,26 @@ func (b *fakeBucket) PutObject(_ context.Context, key string, body []byte) error
 	return nil
 }
 
-func (b *fakeBucket) Versioning(context.Context) (string, error) { return "Enabled", nil }
+func (b *fakeBucket) Versioning(context.Context) (string, error) {
+	if b.versErr != nil {
+		return "", b.versErr
+	}
+	return "Enabled", nil
+}
 
 type fakeCache struct {
-	mu   sync.Mutex
-	objs map[string][]byte
-	dels []string
+	mu              sync.Mutex
+	objs            map[string][]byte
+	dels            []string
+	pullErr, delErr error
 }
 
 func (c *fakeCache) Pull(_ context.Context, h string) ([]byte, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.pullErr != nil {
+		return nil, c.pullErr
+	}
 	raw, ok := c.objs[h]
 	if !ok {
 		return nil, s.ErrNotFound
@@ -104,6 +114,9 @@ func (c *fakeCache) Pull(_ context.Context, h string) ([]byte, error) {
 func (c *fakeCache) Delete(_ context.Context, h string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.delErr != nil {
+		return c.delErr
+	}
 	c.dels = append(c.dels, h)
 	delete(c.objs, h)
 	return nil
@@ -290,6 +303,30 @@ func TestPrivateRewriteHashMismatchAndErrors(t *testing.T) {
 	}
 	if !strings.Contains(log, wrong+"\thash\tmismatch") || !strings.Contains(log, f.withLists[1]+"\tget\t") {
 		t.Fatalf("stderr lacks key and class:\n%s", log)
+	}
+}
+
+// A failed Redis DEL is an error, not a deletion; a failed Redis read and an
+// unreadable versioning status are reported, never guessed.
+func TestPrivateRewriteRedisAndVersioningErrors(t *testing.T) {
+	f := newFixture(t)
+	f.cache.delErr = errors.New("del " + fakeTracker)
+	f.bucket.versErr = errors.New("denied")
+	r, log, err := f.run(t, t.Context(), rewriteOptions{write: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.RedisDeleted != 0 || r.RedisErrors != 1 || r.Versioning != "unknown" || r.Rewritten != 3 {
+		t.Fatalf("report %+v", r)
+	}
+	if !strings.Contains(log, f.withLists[0]+"\tredis-del\t") {
+		t.Fatalf("stderr lacks the failed DEL:\n%s", log)
+	}
+	g := newFixture(t)
+	g.cache.pullErr = errors.New("get " + fakeTracker)
+	r, _, err = g.run(t, t.Context(), rewriteOptions{})
+	if err != nil || r.RedisErrors == 0 || r.RedisPresent != 0 {
+		t.Fatalf("report %+v, err %v", r, err)
 	}
 }
 

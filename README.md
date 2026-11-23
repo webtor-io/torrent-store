@@ -67,24 +67,31 @@ nobody handles credentials:
 # 1. size of the bucket: counts keys, reads nothing
 kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite --list-only
 # 2. dry run: what --write would change
-kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite
+kubectl -n webtor exec -it deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite
 # 3. ONLY after the owner's go-ahead
-kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite --write
+kubectl -n webtor exec -it deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite --write
 # 4. Badger is per pod and out of the tool's reach: restart to flush it
 kubectl -n webtor rollout restart deploy/torrent-store
-# 5. verify: private_with_lists and redis_with_lists are 0
-kubectl -n webtor exec deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite
+# 5. verify: private_with_lists and redis_with_lists are 0 (hash_mismatch objects excepted)
+kubectl -n webtor exec -it deploy/torrent-store -- env GOMEMLIMIT=256MiB /server private-rewrite
 ```
 
 - The tool shares the pod's memory limit with the server: an OOM kills the
   server too. Keep `GOMEMLIMIT` and the default `--concurrency 4`.
 - `--limit N` bounds a run; `--start-after <last_key>` resumes one. `last_key`
   only moves past finished listing pages, so resuming re-reads at most one
-  page. Ctrl-C reaches the process only through `kubectl exec -it`; without a
-  TTY, take `last_key` from the last progress line.
-- Run `--write` only on an image whose Push stores every private copy
-  info-only. On an older image a concurrent Push of the same private hash can
-  write the old copy back; step 5 shows it.
+  page. Ctrl-C reaches the process only through `kubectl exec -it`. Without a
+  TTY, Ctrl-C stops only the local kubectl while the run goes on in the pod,
+  and `pkill server` would also kill the serving process (same binary name):
+  run `--write` with `-it`, and otherwise take `last_key` from the last
+  progress line.
+- Run `--write` only on an image where every write of a private hash is
+  info-only, including the merge onto an old stored copy (the phase-4
+  enforce-only change, which clears the stored copy's lists on any private
+  Push). On an older image, a Push of an old private hash whose copy still
+  holds a default tracker re-writes that copy with its lists; step 5 shows it.
+  If step 5 is not 0, run `--write` again; objects counted as `hash_mismatch`
+  are never rewritten and stay in `private_with_lists`.
 - **Old copies survive outside the live objects.** If the JSON reports
   `"versioning": "Enabled"` or `"Suspended"`, earlier object versions still
   hold the lists, and so does any S3 backup or replica. The rewrite does not
