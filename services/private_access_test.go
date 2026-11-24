@@ -2,18 +2,25 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	log "github.com/sirupsen/logrus"
+	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/webtor-io/torrent-store/privaterecord"
 	pb "github.com/webtor-io/torrent-store/proto"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func accessCount(caller, outcome string) float64 {
@@ -163,6 +170,57 @@ func TestPrivateAccessFailsClosed(t *testing.T) {
 	srv.SetPrivate(NewPrivateRecords(nil, [][]byte{privaterecord.Vector.Key})) // no S3
 	wantRefusal(t, pull(&pb.Caller{Uid: uidA}), codes.FailedPrecondition, "private_unavailable")
 	wantRefusal(t, pull(&pb.Caller{Internal: true}), codes.OK, "")
+}
+
+// A record GET whose caller went away failed on the caller, not on S3: the SDK
+// answers it RequestCanceled wrapping ctx's error, as aws/corehandlers does.
+// A real S3 error under a live context is still unavailable.
+func TestAccessCallerGone(t *testing.T) {
+	hook := logtest.NewGlobal()
+	srv, p, obj := privateServer(t)
+	h := seedPrivate(t, srv, p, true)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	expired, cancel := context.WithDeadline(ctx, time.Now())
+	defer cancel()
+	sdkCanceled := func(ctx context.Context) error {
+		return awserr.New(request.CanceledErrorCode, "request context canceled", ctx.Err())
+	}
+	for _, c := range []struct {
+		name    string
+		ctx     context.Context
+		err     error
+		code    codes.Code
+		outcome string
+	}{
+		{"canceled", canceled, sdkCanceled(canceled), codes.Canceled, "canceled"},
+		{"deadline", expired, sdkCanceled(expired), codes.DeadlineExceeded, "timeout"},
+		{"body read canceled", canceled, context.Canceled, codes.Canceled, "canceled"},
+		{"S3 error", ctx, awserr.New("SlowDown", "reduce your request rate", nil), codes.Unavailable, "unavailable"},
+	} {
+		obj.failOn("get", "private/", c.err)
+		hook.Reset()
+		before := accessCount("uid", c.outcome)
+		_, err := srv.access(c.ctx, h, &pb.Caller{Uid: uidA})
+		wantRefusal(t, err, c.code, "")
+		if accessCount("uid", c.outcome)-before != 1 {
+			t.Fatalf("%s: uid/%s not counted", c.name, c.outcome)
+		}
+		warned := slices.ContainsFunc(hook.AllEntries(), func(e *log.Entry) bool {
+			return e.Message == "private records: S3 request failed"
+		})
+		if warned != (c.code == codes.Unavailable) {
+			t.Fatalf("%s: S3 failure logged = %v", c.name, warned)
+		}
+	}
+	// The record RPCs share the answer.
+	obj.failOn("list", "private/", sdkCanceled(canceled))
+	if _, err := srv.ListPrivateRecords(canceled, &pb.ListPrivateRecordsRequest{Uid: uidA}); status.Code(err) != codes.Canceled {
+		t.Fatalf("list = %v, want Canceled", err)
+	}
+	if _, err := srv.DeletePrivateRecordsByUser(expired, &pb.DeletePrivateRecordsByUserRequest{Uid: uidA}); status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("delete by user = %v, want DeadlineExceeded", err)
+	}
 }
 
 func TestFilesChecksAccessOnCachedManifest(t *testing.T) {

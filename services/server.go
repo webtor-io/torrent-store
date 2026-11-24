@@ -225,7 +225,7 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 		}
 		if in.GetDryRun() {
 			if recordOutcome, err = s.p.upsert(ctx, infoHash, c.GetUid(), tiers, in.GetSource(), false); err != nil {
-				return nil, unavailable(err)
+				return nil, unavailable(ctx, err)
 			}
 			return &pb.PushReply{InfoHash: infoHash, RecordOutcome: recordOutcome}, nil
 		}
@@ -294,7 +294,7 @@ func (s *Server) Push(ctx context.Context, in *pb.PushRequest) (_ *pb.PushReply,
 
 	if rec {
 		if recordOutcome, err = s.p.upsert(ctx, infoHash, c.GetUid(), tiers, in.GetSource(), true); err != nil {
-			return nil, unavailable(err)
+			return nil, unavailable(ctx, err)
 		}
 	}
 	return &pb.PushReply{InfoHash: infoHash, RecordOutcome: recordOutcome}, nil

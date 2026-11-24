@@ -118,9 +118,12 @@ func init() {
 	prometheus.MustRegister(grpcMetrics)
 	// Phase 3 is judged on stripped private pushes: the series exists at 0.
 	pushTotal.WithLabelValues("true", pushStripped)
-	// Read by the phase gates (legacy) and PrivateRecordsBad (unreadable).
+	// Read by the phase gates (legacy) and PrivateRecordsBad (unreadable);
+	// the failed lookups so that increase() sees their first event.
 	privateAccessTotal.WithLabelValues("legacy", "sign_in")
-	privateAccessTotal.WithLabelValues("uid", "unreadable")
+	for _, o := range []string{"unreadable", "unavailable", "canceled", "timeout"} {
+		privateAccessTotal.WithLabelValues("uid", o)
+	}
 }
 
 // opOutcome maps a provider call result onto a metric label.
