@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"reflect"
 	"slices"
 	"strings"
@@ -19,8 +20,11 @@ import (
 	logtest "github.com/sirupsen/logrus/hooks/test"
 	"github.com/webtor-io/torrent-store/privaterecord"
 	pb "github.com/webtor-io/torrent-store/proto"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 )
 
 func accessCount(caller, outcome string) float64 {
@@ -220,6 +224,76 @@ func TestAccessCallerGone(t *testing.T) {
 	}
 	if _, err := srv.DeletePrivateRecordsByUser(expired, &pb.DeletePrivateRecordsByUserRequest{Uid: uidA}); status.Code(err) != codes.DeadlineExceeded {
 		t.Fatalf("delete by user = %v, want DeadlineExceeded", err)
+	}
+}
+
+// hangObjects is S3 that stops answering record GETs: one returns only when
+// ctx ends, with the error aws-sdk-go gives then. entered marks each GET.
+type hangObjects struct {
+	*memObjects
+	entered chan struct{}
+}
+
+func (o hangObjects) GetObject(ctx context.Context, _ string) ([]byte, error) {
+	o.entered <- struct{}{}
+	<-ctx.Done()
+	return nil, awserr.New(request.CanceledErrorCode, "request context canceled", ctx.Err())
+}
+
+// Over the wire a caller's deadline reaches the handler as its RST_STREAM,
+// which cancels ctx before this server's own timer: a lookup that hung until
+// the caller gave up must still be a timeout and DeadlineExceeded (a hard
+// error), and only a caller that left early canceled.
+func TestAccessCallerDeadlineOverWire(t *testing.T) {
+	srv, p, obj := privateServer(t)
+	h := seedPrivate(t, srv, p, true)
+	const n = 20
+	hang := hangObjects{obj, make(chan struct{}, n+1)}
+	srv.SetPrivate(newRecords(hang))
+	gs := (&GRPCServer{s: srv}).newServer()
+	lis := bufconn.Listen(1 << 20)
+	go func() { _ = gs.Serve(lis) }()
+	t.Cleanup(gs.Stop)
+	conn, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	cl := pb.NewTorrentStoreClient(conn)
+	pull := func(ctx context.Context) error {
+		_, err := cl.Pull(ctx, &pb.PullRequest{InfoHash: h, Caller: &pb.Caller{Uid: uidA}})
+		return err
+	}
+	outcomes := func() [3]float64 {
+		return [3]float64{accessCount("uid", "timeout"), accessCount("uid", "canceled"), accessCount("uid", "unavailable")}
+	}
+	before := outcomes()
+	dlBefore, cBefore := handledTotal(t, "Pull", codes.DeadlineExceeded), handledTotal(t, "Pull", codes.Canceled)
+
+	left, cancel := context.WithTimeout(ctx, time.Minute)
+	go func() { <-hang.entered; cancel() }()
+	if err := pull(left); status.Code(err) != codes.Canceled {
+		t.Fatalf("left early: %v", err)
+	}
+	for range n {
+		hung, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		err := pull(hung)
+		cancel()
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("hung: %v", err)
+		}
+	}
+	gs.GracefulStop() // the client returns first; this waits for the handlers
+
+	after := outcomes()
+	if got := [3]float64{after[0] - before[0], after[1] - before[1], after[2] - before[2]}; got != [3]float64{n, 1, 0} {
+		t.Fatalf("uid timeout/canceled/unavailable = %v, want [%d 1 0]", got, n)
+	}
+	if dl, c := handledTotal(t, "Pull", codes.DeadlineExceeded)-dlBefore, handledTotal(t, "Pull", codes.Canceled)-cBefore; dl != n || c != 1 {
+		t.Fatalf("handled_total{Pull} DeadlineExceeded %v, Canceled %v; want %d, 1", dl, c, n)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/webtor-io/torrent-store/privaterecord"
@@ -166,6 +167,11 @@ func logRecordPush(h, uid, source string, raw [][]string, dry bool, outcome stri
 	log.WithFields(f).Info("private record push")
 }
 
+// callerDeadlineSlack covers the grpc-timeout header's trip and a stalled
+// reader (CPU throttling) with room to spare. Callers give 10 s, so a page
+// closed in the last second of a lookup that slow is counted a timeout.
+const callerDeadlineSlack = time.Second
+
 // unavailable answers an S3 failure. Neither the status nor the log carries
 // the S3 text: a request error names the object URL, and with it the uid.
 //
@@ -174,9 +180,19 @@ func logRecordPush(h, uid, source string, raw [][]string, dry bool, outcome stri
 // error. It is answered with ctx's status, Canceled or DeadlineExceeded. The
 // client never reads it, having returned its own already; it is for this
 // server's metrics and logs, where a closed page is not an outage.
+//
+// A caller's deadline seldom arrives as one: the caller's transport sends
+// RST_STREAM(CANCEL) when it expires, and grpc-go cancels ctx on it before
+// this server's own timer, started later from grpc-timeout, fires. So a cancel
+// within callerDeadlineSlack of ctx's deadline is that deadline: a lookup that
+// hung until the caller gave up stays DeadlineExceeded, a hard error, and does
+// not pass for a closed page.
 func unavailable(ctx context.Context, err error) error {
-	if ctx.Err() != nil {
-		st := status.FromContextError(ctx.Err())
+	if err := ctx.Err(); err != nil {
+		if d, ok := ctx.Deadline(); ok && time.Until(d) < callerDeadlineSlack {
+			err = context.DeadlineExceeded
+		}
+		st := status.FromContextError(err)
 		log.WithField("grpc_code", st.Code().String()).Info("private records: request ended by its caller")
 		return st.Err()
 	}
