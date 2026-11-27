@@ -45,6 +45,7 @@ type prefilter struct {
 // is skipped too: its entries are release markers that DISCARD a
 // stopwords hit (see Stoplist.checkNormalized), so folding them into
 // the alternation would make every FLAC rip pay for the full tree.
+// The `mask` section is skipped for the same reason.
 func newPrefilter(path string) (*prefilter, error) {
 	if path == "" {
 		return nil, nil
@@ -67,7 +68,7 @@ func newPrefilterFromYaml(raw []byte) (*prefilter, error) {
 	var alts []string
 	seen := map[string]struct{}{}
 	for section, items := range sections {
-		if section == stoplistMainKey || section == stoplistExceptKey {
+		if section == stoplistMainKey || section == stoplistExceptKey || section == stoplistMaskKey {
 			continue
 		}
 		for _, item := range items {
