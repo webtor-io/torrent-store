@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/webtor-io/torrent-store/privaterecord"
@@ -166,9 +167,35 @@ func logRecordPush(h, uid, source string, raw [][]string, dry bool, outcome stri
 	log.WithFields(f).Info("private record push")
 }
 
+// callerDeadlineSlack covers the grpc-timeout header's trip and a stalled
+// reader (CPU throttling) with room to spare. Callers give 10 s, so a page
+// closed in the last second of a lookup that slow is counted a timeout.
+const callerDeadlineSlack = time.Second
+
 // unavailable answers an S3 failure. Neither the status nor the log carries
 // the S3 text: a request error names the object URL, and with it the uid.
-func unavailable(err error) error {
+//
+// A request whose context ended first did not fail on S3: the SDK reports it
+// as RequestCanceled (set only once ctx is done), a body read as ctx's own
+// error. It is answered with ctx's status, Canceled or DeadlineExceeded. The
+// client never reads it, having returned its own already; it is for this
+// server's metrics and logs, where a closed page is not an outage.
+//
+// A caller's deadline seldom arrives as one: the caller's transport sends
+// RST_STREAM(CANCEL) when it expires, and grpc-go cancels ctx on it before
+// this server's own timer, started later from grpc-timeout, fires. So a cancel
+// within callerDeadlineSlack of ctx's deadline is that deadline: a lookup that
+// hung until the caller gave up stays DeadlineExceeded, a hard error, and does
+// not pass for a closed page.
+func unavailable(ctx context.Context, err error) error {
+	if err := ctx.Err(); err != nil {
+		if d, ok := ctx.Deadline(); ok && time.Until(d) < callerDeadlineSlack {
+			err = context.DeadlineExceeded
+		}
+		st := status.FromContextError(err)
+		log.WithField("grpc_code", st.Code().String()).Info("private records: request ended by its caller")
+		return st.Err()
+	}
 	code := "unknown"
 	var ae interface{ Code() string } // awserr.Error
 	if errors.As(err, &ae) {
@@ -181,7 +208,8 @@ func unavailable(err error) error {
 // access decides whether caller c may read private torrent h. A nil error means
 // allowed; a uid is allowed by its record, whose tiers come back from the same
 // read. Called only for private torrents. Without a Caller the call came from
-// an old caller: sign_in, as for anon. An S3 error is Unavailable, never no_record.
+// an old caller: sign_in, as for anon. An S3 error is Unavailable, never no_record;
+// a lookup its caller abandoned is canceled (or timeout), see unavailable.
 func (s *Server) access(ctx context.Context, h string, c *pb.Caller) ([][]string, error) {
 	count := func(caller, outcome string) { privateAccessTotal.WithLabelValues(caller, outcome).Inc() }
 	switch {
@@ -211,8 +239,16 @@ func (s *Server) access(ctx context.Context, h string, c *pb.Caller) ([][]string
 		count("uid", "unreadable")
 		return nil, refusal(codes.PermissionDenied, reasonNoRecord, msgNoRecord)
 	case err != nil:
-		count("uid", "unavailable")
-		return nil, unavailable(err)
+		err = unavailable(ctx, err)
+		switch status.Code(err) {
+		case codes.Canceled:
+			count("uid", "canceled")
+		case codes.DeadlineExceeded:
+			count("uid", "timeout")
+		default:
+			count("uid", "unavailable")
+		}
+		return nil, err
 	}
 	count("uid", "allowed")
 	return tiers, nil
@@ -224,7 +260,7 @@ func (s *Server) ListPrivateRecords(ctx context.Context, in *pb.ListPrivateRecor
 	}
 	recs, err := s.p.list(ctx, in.GetUid())
 	if err != nil {
-		return nil, unavailable(err)
+		return nil, unavailable(ctx, err)
 	}
 	return &pb.ListPrivateRecordsReply{Records: recs}, nil
 }
@@ -235,7 +271,7 @@ func (s *Server) DeletePrivateRecordsByUser(ctx context.Context, in *pb.DeletePr
 	}
 	n, err := s.p.deleteByUser(ctx, in.GetUid())
 	if err != nil {
-		return nil, unavailable(err)
+		return nil, unavailable(ctx, err)
 	}
 	return &pb.DeletePrivateRecordsReply{Deleted: n}, nil
 }

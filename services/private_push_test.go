@@ -2,14 +2,18 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/request"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sirupsen/logrus"
 	logtest "github.com/sirupsen/logrus/hooks/test"
@@ -398,6 +402,38 @@ func TestPushRecordLogLineBounded(t *testing.T) {
 	_, _ = pushAs(srv, privateTorrent(t, []string{trA}), &pb.Caller{Uid: uidA}, func(r *pb.PushRequest) { r.Source = "http://tracker.example/" })
 	if l = recordLine(t, hook); l.Data["source"] != "invalid" || l.Data["reason"] != "invalidargument" {
 		t.Fatalf("bad source: %v", l.Data)
+	}
+}
+
+// A record upsert its caller abandoned, on the dry_run and the write path,
+// answers with ctx's status, logs failed with it as the reason, and a write
+// counts as an error.
+func TestPushRecordCallerGone(t *testing.T) {
+	hook := logtest.NewGlobal()
+	defer hook.Reset()
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	expired, cancel := context.WithDeadline(ctx, time.Now())
+	defer cancel()
+	raw := privateTorrent(t, []string{trA})
+	for _, c := range []struct {
+		ctx  context.Context
+		code codes.Code
+	}{{canceled, codes.Canceled}, {expired, codes.DeadlineExceeded}} {
+		for _, isDry := range []bool{true, false} {
+			srv, _, obj := privateServer(t)
+			obj.failOn("get", "private/", awserr.New(request.CanceledErrorCode, "request context canceled", c.ctx.Err()))
+			errs := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushError))
+			_, err := srv.Push(c.ctx, &pb.PushRequest{Torrent: raw, Caller: &pb.Caller{Uid: uidA}, Source: "site", DryRun: isDry})
+			wantRefusal(t, err, c.code, "")
+			if l := recordLine(t, hook); l.Data["outcome"] != "failed" || l.Data["reason"] != strings.ToLower(c.code.String()) || (l.Data["dry_run"] == true) != isDry {
+				t.Fatalf("%v dry_run=%v: line %v", c.code, isDry, l.Data)
+			}
+			want := map[bool]float64{false: 1}[isDry] // dry_run is never counted
+			if d := testutil.ToFloat64(pushTotal.WithLabelValues("true", pushError)) - errs; d != want {
+				t.Fatalf("%v dry_run=%v: push error delta = %v, want %v", c.code, isDry, d, want)
+			}
+		}
 	}
 }
 

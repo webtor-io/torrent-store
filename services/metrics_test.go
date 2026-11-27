@@ -30,6 +30,9 @@ func TestMain(m *testing.M) {
 # HELP torrent_store_private_access_total Access decisions on private torrents by caller class and outcome.
 # TYPE torrent_store_private_access_total counter
 torrent_store_private_access_total{caller="legacy",outcome="sign_in"} 0
+torrent_store_private_access_total{caller="uid",outcome="canceled"} 0
+torrent_store_private_access_total{caller="uid",outcome="timeout"} 0
+torrent_store_private_access_total{caller="uid",outcome="unavailable"} 0
 torrent_store_private_access_total{caller="uid",outcome="unreadable"} 0
 `)),
 		testutil.CollectAndCompare(pushTotal, strings.NewReader(`
