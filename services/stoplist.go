@@ -72,8 +72,12 @@ const (
 	stoplistExceptKey = "except"
 	stoplistMaskKey   = "mask"
 
-	// maskWord replaces a masked number; it must not be a rule word.
+	// maskWord replaces a masked number. It must not be a rule word and
+	// stays plain lowercase letters: rules may read the word after an age.
 	maskWord = "masked"
+
+	// maskPasses caps the passes of one mask over a string.
+	maskPasses = 16
 
 	// stoplistMainStopwordsLine is the main: line index the except
 	// layer applies to. Mirrors mainRuleLabels[0].
@@ -438,24 +442,37 @@ func (s *Stoplist) checkNormalized(norm string) *sl.CheckResult {
 }
 
 // maskNumbers replaces the capture group of every mask match with
-// maskWord, mask by mask in file order.
+// maskWord, mask by mask in file order. A mask runs until the string
+// stops changing: one ending in ".*<extension>$" matches only once per
+// pass, so a title repeated in folder and file name needs a second pass.
 func (s *Stoplist) maskNumbers(norm string) string {
 	for _, m := range s.mask {
-		var b strings.Builder
-		last := 0
-		for _, ix := range m.re.FindAllStringSubmatchIndex(norm, -1) {
-			if ix[2] < 0 || ix[2] == ix[3] {
-				continue
+		for i := 0; i < maskPasses; i++ {
+			next := maskOnce(m.re, norm)
+			if next == norm {
+				break
 			}
-			b.WriteString(norm[last:ix[2]])
-			b.WriteString(maskWord)
-			last = ix[3]
-		}
-		if last > 0 {
-			norm = b.String() + norm[last:]
+			norm = next
 		}
 	}
 	return norm
+}
+
+func maskOnce(re *regexp.Regexp, norm string) string {
+	var b strings.Builder
+	last := 0
+	for _, ix := range re.FindAllStringSubmatchIndex(norm, -1) {
+		if ix[2] < 0 || ix[2] == ix[3] {
+			continue
+		}
+		b.WriteString(norm[last:ix[2]])
+		b.WriteString(maskWord)
+		last = ix[3]
+	}
+	if last == 0 {
+		return norm
+	}
+	return b.String() + norm[last:]
 }
 
 // checkRules is the prefilter, rule tree and except layer for one

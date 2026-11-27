@@ -44,6 +44,8 @@ func TestStoplistMask(t *testing.T) {
 		{"Sample Show OVA 02 alpha the return.mkv", false},
 		{"Sample Band - 7 years song - beta.flac", false},
 		{"Sample Band - 7 years song - beta.mp3", false},
+		// the title again in the file name: every copy is masked
+		{"Sample Band - 7 years song - beta/01 Sample Band - 7 years song.mp3", false},
 		// the music mask needs an audio file
 		{"Sample Band - 7 years song - beta.mkv", true},
 		// another age in the same string still blocks
