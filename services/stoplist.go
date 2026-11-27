@@ -48,6 +48,8 @@ const maxCommentRunes = 300
 //	                   hard ones on a later line; composites in between
 //	except:    [...]   optional; /regex/ lexemes only, handled by this
 //	                   service, never passed to the rule library
+//	mask:      [...]   optional; /regex/ lexemes with exactly one capture
+//	                   group, handled by this service like except
 //
 // `except` is a negative-context allowlist for main line 0
 // only. RE2 has no lookahead, so a stopword sitting next to a track
@@ -56,9 +58,26 @@ const maxCommentRunes = 300
 // matches the SAME normalised string, that hit is discarded and the
 // string is re-checked against every main line after line 0. Hits on
 // those lines are never excepted.
+//
+// `mask` takes a number out of a closed list of titles where it is not
+// an age (an episode number before "yo", a year count in a song name).
+// When a string blocks, every mask regex replaces its capture group in
+// every match with maskWord and the masked string is checked again by
+// the same pipeline. The hard lines (main after maskLayout) still see
+// the unmasked string, so a mask can only drop an age hit. It never
+// allowlists a string: any other age, sexual or hard hit still blocks.
+// The phrases live in the private rule file, not in this repository.
 const (
 	stoplistMainKey   = "main"
 	stoplistExceptKey = "except"
+	stoplistMaskKey   = "mask"
+
+	// maskWord replaces a masked number. It must not be a rule word and
+	// stays plain lowercase letters: rules may read the word after an age.
+	maskWord = "masked"
+
+	// maskPasses caps the passes of one mask over a string.
+	maskPasses = 16
 
 	// stoplistMainStopwordsLine is the main: line index the except
 	// layer applies to. Mirrors mainRuleLabels[0].
@@ -73,7 +92,8 @@ const (
 	// screened: Files serves any manifest stamped with the current
 	// version without screening it again, so a code-only change would
 	// otherwise never reach torrents whose manifest is already cached.
-	stoplistInputRev = "input-v2\x00"
+	// v3: the mask layer.
+	stoplistInputRev = "input-v3\x00"
 )
 
 var (
@@ -107,6 +127,11 @@ var (
 		"age_sexual", // line 1: {age}+{sexual}
 		"age_name",   // line 2: {age}+{name}
 	}
+
+	// maskLayout is the main: prefix the mask layer is written for: the
+	// ambiguous direct-block line and the two age composites. A rule
+	// file with a mask and any other prefix is refused.
+	maskLayout = []string{"{ambiguous_stopwords}", "{age}+{sexual}", "{age}+{name}"}
 )
 
 const (
@@ -131,7 +156,7 @@ type Stoplist struct {
 	// except holds the compiled `except:` regexes alongside their
 	// source text (for the log line). Empty when the rule file has no
 	// except section — then cc is nil and the except layer is inert.
-	except []exceptRule
+	except []regexRule
 	// version identifies the rule file this Stoplist was built from and
 	// the input revision (first 16 hex of sha256(stoplistInputRev+file)).
 	// Cached manifests carry it as a stamp, so a stoplist change
@@ -146,9 +171,13 @@ type Stoplist struct {
 	// library only prefixes "line index N" when a line rule has more
 	// than one line.
 	mainLines int
+	// mask holds the compiled `mask:` regexes; empty means no mask layer.
+	// hard is main: without maskLayout, nil when nothing follows it.
+	mask []regexRule
+	hard sl.Checker
 }
 
-type exceptRule struct {
+type regexRule struct {
 	src string
 	re  *regexp.Regexp
 }
@@ -182,11 +211,16 @@ func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
 	if !ok {
 		return nil, errors.Errorf("stoplist yaml has no %q section", stoplistMainKey)
 	}
-	except, err := compileExcept(sections[stoplistExceptKey])
+	except, err := compileRegexes(stoplistExceptKey, sections[stoplistExceptKey], 0)
+	if err != nil {
+		return nil, err
+	}
+	mask, err := compileRegexes(stoplistMaskKey, sections[stoplistMaskKey], 1)
 	if err != nil {
 		return nil, err
 	}
 	delete(sections, stoplistExceptKey)
+	delete(sections, stoplistMaskKey)
 
 	ch, err := sl.NewRule(sections)
 	if err != nil {
@@ -197,6 +231,7 @@ func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
 		c:         ch,
 		except:    except,
 		mainLines: len(main),
+		mask:      mask,
 	}
 	if len(except) > 0 {
 		composite := make(map[string][]string, len(sections))
@@ -206,6 +241,21 @@ func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
 		composite[stoplistMainKey] = main[stoplistMainStopwordsLine+1:]
 		if s.cc, err = sl.NewRule(composite); err != nil {
 			return nil, errors.Wrap(err, "failed to build composite-only stoplist")
+		}
+	}
+	if len(mask) > 0 {
+		if len(main) < len(maskLayout) || strings.Join(main[:len(maskLayout)], "\n") != strings.Join(maskLayout, "\n") {
+			return nil, errors.Errorf("stoplist %s needs main: to start with %q", stoplistMaskKey, maskLayout)
+		}
+		if len(main) > len(maskLayout) {
+			hard := make(map[string][]string, len(sections))
+			for k, v := range sections {
+				hard[k] = v
+			}
+			hard[stoplistMainKey] = main[len(maskLayout):]
+			if s.hard, err = sl.NewRule(hard); err != nil {
+				return nil, errors.Wrap(err, "failed to build hard-only stoplist")
+			}
 		}
 	}
 	pf, err := newPrefilterFromYaml(raw)
@@ -218,24 +268,29 @@ func newStoplistFromYaml(raw []byte) (*Stoplist, error) {
 	return s, nil
 }
 
-// compileExcept validates and compiles the except section. Entries
-// must be `/regex/` lexemes: a bare word would silently compile to a
-// substring match nobody asked for, so it is rejected instead.
-func compileExcept(items []string) ([]exceptRule, error) {
-	var out []exceptRule
+// compileRegexes validates and compiles the except or mask section.
+// Entries must be `/regex/` lexemes: a bare word would silently compile
+// to a substring match nobody asked for, so it is rejected instead.
+// groups is the number of capture groups an entry must have (mask: 1);
+// 0 means any.
+func compileRegexes(key string, items []string, groups int) ([]regexRule, error) {
+	var out []regexRule
 	for _, item := range items {
 		item = strings.TrimSpace(item)
 		if item == "" {
 			continue
 		}
 		if len(item) < 2 || item[0] != '/' || item[len(item)-1] != '/' {
-			return nil, errors.Errorf("stoplist %s entry %q is not a /regex/ lexeme", stoplistExceptKey, item)
+			return nil, errors.Errorf("stoplist %s entry %q is not a /regex/ lexeme", key, item)
 		}
 		re, err := regexp.Compile(item[1 : len(item)-1])
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to compile stoplist %s entry %q", stoplistExceptKey, item)
+			return nil, errors.Wrapf(err, "failed to compile stoplist %s entry %q", key, item)
 		}
-		out = append(out, exceptRule{src: item, re: re})
+		if groups > 0 && re.NumSubexp() != groups {
+			return nil, errors.Errorf("stoplist %s entry %q must have %d capture group(s)", key, item, groups)
+		}
+		out = append(out, regexRule{src: item, re: re})
 	}
 	return out, nil
 }
@@ -366,10 +421,63 @@ func (s *Stoplist) checkOne(d string) *sl.CheckResult {
 
 // checkNormalized is THE decision for one normalised string: the cheap
 // prefilter (one combined RE2 regex over all leaf patterns), the full
-// sl.Checker only on a prefilter hit, then the except layer. Returns
-// an empty result when nothing blocks. Shared by the one-shot path and
-// the parallel worker so the two cannot drift.
+// sl.Checker only on a prefilter hit, then the except layer, then the
+// mask layer. Returns an empty result when nothing blocks. Shared by the
+// one-shot path and the parallel worker so the two cannot drift.
 func (s *Stoplist) checkNormalized(norm string) *sl.CheckResult {
+	cr := s.checkRules(norm)
+	if !cr.Found || len(s.mask) == 0 {
+		return cr
+	}
+	masked := s.maskNumbers(norm)
+	if masked == norm || (s.hard != nil && s.hard.Check(norm).Found) {
+		return cr
+	}
+	if mcr := s.checkRules(masked); mcr.Found {
+		return mcr
+	}
+	log.WithField("data", truncateRunes(norm, exceptLogRunes)).
+		Info("stoplist age hit discarded by mask rule")
+	return &sl.CheckResult{}
+}
+
+// maskNumbers replaces the capture group of every mask match with
+// maskWord, mask by mask in file order. A mask runs until the string
+// stops changing: one ending in ".*<extension>$" matches only once per
+// pass, so a title repeated in folder and file name needs a second pass.
+func (s *Stoplist) maskNumbers(norm string) string {
+	for _, m := range s.mask {
+		for i := 0; i < maskPasses; i++ {
+			next := maskOnce(m.re, norm)
+			if next == norm {
+				break
+			}
+			norm = next
+		}
+	}
+	return norm
+}
+
+func maskOnce(re *regexp.Regexp, norm string) string {
+	var b strings.Builder
+	last := 0
+	for _, ix := range re.FindAllStringSubmatchIndex(norm, -1) {
+		if ix[2] < 0 || ix[2] == ix[3] {
+			continue
+		}
+		b.WriteString(norm[last:ix[2]])
+		b.WriteString(maskWord)
+		last = ix[3]
+	}
+	if last == 0 {
+		return norm
+	}
+	return b.String() + norm[last:]
+}
+
+// checkRules is the prefilter, rule tree and except layer for one
+// normalised string.
+func (s *Stoplist) checkRules(norm string) *sl.CheckResult {
 	if !s.pf.check(norm) {
 		return &sl.CheckResult{}
 	}
@@ -398,7 +506,7 @@ func (s *Stoplist) checkNormalized(norm string) *sl.CheckResult {
 
 // exceptMatch returns the first except rule matching the normalised
 // string, or nil.
-func (s *Stoplist) exceptMatch(norm string) *exceptRule {
+func (s *Stoplist) exceptMatch(norm string) *regexRule {
 	for i := range s.except {
 		if s.except[i].re.MatchString(norm) {
 			return &s.except[i]
